@@ -1,0 +1,117 @@
+---
+title: "part1"
+output: html_document
+date: "2026-05-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(Seurat)
+library(Matrix)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+
+options(Seurat.object.assay.version = "v3")
+```
+
+```{r}
+# Read the files
+counts <- readMM("counts.mtx")
+meta <- read.table("meta.tsv")
+features <- read.table("features.tsv")[,1]
+dimnames(counts) <- list(features, rownames(meta))
+seurat <- CreateSeuratObject(counts = counts, meta.data = meta)
+
+# How many cells and genes?
+cat("Genes:", nrow(counts), "\n")
+cat("Cells:", ncol(counts), "\n")
+
+# Look at your metadata 
+table(meta$sample, meta$condition)
+
+``` 
+Split by sample -> 4 sample/seurat
+```{r}
+seurat_list <- SplitObject(seurat, split.by = "sample")
+```
+
+Quality Control (QC) and filtering low-quality cells
+```{r}
+#Plotting "nFeature_RNA", "nCount_RNA", "percent.mt"
+seurat_list <- lapply(seurat_list, function(x) {
+  x[["percent.mt"]] <- PercentageFeatureSet(x, pattern = "^MT[-\\.]")
+  x
+})
+lapply(seurat_list, function(x) {
+  VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+})
+lapply(seurat_list, function(x) {
+  plot1 <- FeatureScatter(x, feature1 = "nCount_RNA", feature2 = "percent.mt") + ggtitle(unique(x$sample))
+  plot2 <- FeatureScatter(x, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + ggtitle(unique(x$sample))
+  plot1 + plot2
+})
+
+#Filter the cells by fixed threshold and find most 3000 differentially expressed genes
+seurat_list <- lapply(seurat_list, function(x) {
+  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 3500 & percent.mt < 10)
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, nfeatures = 3000)
+  x <- ScaleData(x, vars.to.regress = c("nFeature_RNA", "percent.mt"))
+  x
+})
+```
+
+PCA over 4 samples
+```{r}
+seurat_list <- lapply(seurat_list, function(x) {
+  x <- RunPCA(x, npcs = 50)
+  x
+})
+
+#2 method to visualize data
+#Elbow PCA
+lapply(seurat_list, function(x) {
+  ElbowPlot(x, ndims = ncol(Embeddings(x, "pca")))
+})
+
+#Heatmap PCA
+lapply(seurat_list, function(x) {
+  PCHeatmap(x, dims = 1:15, cells = 500, balanced = TRUE, ncol = 4)
+})
+```
+
+Data Integration: YES or NO ?
+```{r}
+# Merge all samples without integration
+seurat_merged <- merge(x = seurat_list$B1_17_1_day21, 
+                       y = c(seurat_list$D2_22_3_day21, 
+                             seurat_list$wt_2_day21, 
+                             seurat_list$wt_4_day21),
+                       add.cell.ids = c("B1", "D2", "wt2", "wt4")) %>%
+  NormalizeData() %>%
+  FindVariableFeatures(nfeatures = 3000) %>%
+  ScaleData(vars.to.regress = c("nFeature_RNA", "percent.mt")) %>%
+  RunPCA(npcs = 50) %>%
+  RunUMAP(dims = 1:15)
+
+# Plot by sample
+DimPlot(seurat_merged, group.by = "sample")
+
+# Plot by condition
+DimPlot(seurat_merged, group.by = "condition")
+
+p <- FeaturePlot(seurat_test, 
+                     c("PECAM1", "VWF", "CD34", "KDR", "TEK", "CLDN5"), 
+                     ncol = 2, 
+                     pt.size = 0.1)
+
+p
+
+```
+
+

@@ -1,0 +1,540 @@
+---
+title: "single cell"
+author: "Ieva Gudelytė"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(Seurat)
+library(Matrix)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+options(Seurat.object.assay.version = "v3")
+```
+
+```{r}
+counts <- readMM("counts.mtx.gz")
+meta <- read.table("metadata.tsv.gz")
+features <- read.table("features.tsv.gz")[,1]
+dimnames(counts) <- list(features, rownames(meta))
+seurat <- CreateSeuratObject(counts = counts, meta.data = meta)
+```
+
+```{r}
+seurat_list <- SplitObject(seurat, split.by = "bio_sample")
+```
+
+```{r}
+seurat_list <- lapply(seurat_list, function(x) {
+  x[["percent.mt"]] <- PercentageFeatureSet(x, pattern = "^MT[-\\.]")
+  x
+})
+```
+
+```{r}
+lapply(seurat_list, function(x) {
+  VlnPlot(x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+})
+```
+
+```{r}
+lapply(seurat_list, function(x) {
+  plot1 <- FeatureScatter(x, feature1 = "nCount_RNA", feature2 = "percent.mt")
+  plot2 <- FeatureScatter(x, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+  plot1 + plot2
+})
+```
+
+```{r}
+seurat_list <- lapply(seurat_list, function(x) {
+  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 3500 & percent.mt < 10)
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, nfeatures = 3000)
+  x <- ScaleData(x)
+  x <- ScaleData(x, vars.to.regress = c("nFeature_RNA", "percent.mt"))
+  x
+})
+```
+
+```{r}
+seurat_list <- lapply(seurat_list, function(x) {
+  x <- RunPCA(x, npcs = 50)
+  x
+})
+```
+
+```{r}
+lapply(seurat_list, function(x) {
+  ElbowPlot(x, ndims = ncol(Embeddings(x, "pca")))
+})
+```
+
+```{r}
+lapply(seurat_list, function(x) {
+  PCHeatmap(x, dims = 1:10, cells = 500, balanced = TRUE, ncol = 4)
+})
+```
+
+# Is data integration necessary?
+
+```{r}
+counts_test <- readMM("counts.mtx.gz")
+meta_test <- read.table("metadata.tsv.gz")
+features_test <- read.table("features.tsv.gz")[,1]
+dimnames(counts_test) <- list(features_test, rownames(meta_test))
+seurat_test <- CreateSeuratObject(counts = counts_test, meta.data = meta_test)
+```
+
+```{r}
+seurat_list_test <- SplitObject(seurat_test, split.by = "bio_sample")
+```
+
+```{r}
+seurat_test <- merge(x = seurat_list_test$Org25, y = c(seurat_list_test$Org28, seurat_list_test$Org56, seurat_list_test$Org54), add.cell.ids = c("Org25","Org28","Org56","Org54")) %>%
+  NormalizeData() %>%
+  FindVariableFeatures(nfeatures = 3000) %>%
+ ScaleData() %>%
+ RunPCA(npcs = 50) %>%
+ RunUMAP(dims = 1:20)
+```
+
+```{r}
+plot1 <- DimPlot(seurat_test, group.by="bio_sample")
+plot2 <- FeaturePlot(seurat_test, c("FOXG1","EMX1","NSG1","SOX2"), ncol=2, pt.size =
+0.1)
+plot1 + plot2 + plot_layout(widths = c(1.5, 2))
+```
+
+Seems like it is.
+
+# Data integration using Seurat
+
+set dir
+libraries
+seurat_int_60 = readRDS("integrated_seurat_60.rds")
+seurat_int_120 = readRDS("integrated_seurat_120.rds")
+
+```{r}
+counts_int <- readMM("counts.mtx.gz")
+meta_int <- read.table("metadata.tsv.gz")
+features_int <- read.table("features.tsv.gz")[,1]
+dimnames(counts_int) <- list(features_int, rownames(meta_int))
+seurat_int <- CreateSeuratObject(counts = counts_int, meta.data = meta_int)
+```
+
+```{r}
+seurat_list_int <- SplitObject(seurat_int, split.by = "bio_sample")
+```
+
+```{r}
+seurat_list_int <- lapply(seurat_list_int, function(x) {
+  x[["percent.mt"]] <- PercentageFeatureSet(x, pattern = "^MT[-\\.]")
+  x
+})
+```
+
+```{r}
+seurat_list_int <- lapply(seurat_list_int, function(x) {
+  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 3500 & percent.mt < 10)
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, nfeatures = 3000)
+  x
+})
+```
+
+```{r}
+seurat_list_int60 = seurat_list_int[c("Org25", "Org28")]
+seurat_list_int120 = seurat_list_int[c("Org56", "Org54")]
+anchors60 <- FindIntegrationAnchors(object.list = seurat_list_int60, dims = 1:30)
+anchors120 <- FindIntegrationAnchors(object.list = seurat_list_int120, dims = 1:30)
+```
+
+```{r}
+seurat_int_60 <- IntegrateData(anchors60, dims = 1:30)
+seurat_int_120 <- IntegrateData(anchors120, dims = 1:30)
+```
+
+```{r}
+seurat_int_60 <- ScaleData(seurat_int_60)
+seurat_int_60 <- RunPCA(seurat_int_60, npcs = 50)
+seurat_int_60 <- RunUMAP(seurat_int_60, dims = 1:30)
+seurat_int_60 <- RunTSNE(seurat_int_60, dims = 1:30)
+seurat_int_60 <- FindNeighbors(seurat_int_60, dims = 1:30) %>% FindClusters(resolution = 0.6)
+```
+
+```{r}
+seurat_int_120 <- ScaleData(seurat_int_120)
+seurat_int_120 <- RunPCA(seurat_int_120, npcs = 50)
+seurat_int_120 <- RunUMAP(seurat_int_120, dims = 1:30)
+seurat_int_120 <- RunTSNE(seurat_int_120, dims = 1:30)
+seurat_int_120 <- FindNeighbors(seurat_int_120, dims = 1:30) %>% FindClusters(resolution = 0.6)
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+plot1 <- UMAPPlot(seurat_int_60, group.by="bio_sample")
+plot2 <- UMAPPlot(seurat_int_60, label = T)
+plot3 <- FeaturePlot(seurat_int_60, c("SOX2","STMN2","HOPX","SYT1"), ncol = 2, pt.size = 0.1)
+((plot1 / plot2) | plot3) + plot_layout(width = c(1,2))
+```
+
+```{r}
+DefaultAssay(seurat_int_120) <- "RNA"
+plot1 <- UMAPPlot(seurat_int_120, group.by="bio_sample")
+plot2 <- UMAPPlot(seurat_int_120, label = T)
+plot3 <- FeaturePlot(seurat_int_120, c("SOX2","STMN2","HOPX","SYT1"), ncol = 2, pt.size = 0.1)
+((plot1 / plot2) | plot3) + plot_layout(width = c(1,2))
+```
+
+```{r}
+saveRDS(seurat_int_60, file="integrated_seurat_60.rds")
+saveRDS(seurat_int_120, file="integrated_seurat_120.rds")
+```
+
+```{r}
+plot1 <- TSNEPlot(seurat_int_60, group.by="bio_sample")
+plot2 <- UMAPPlot(seurat_int_60, group.by="bio_sample")
+plot1 + plot2
+```
+
+```{r}
+plot1 <- TSNEPlot(seurat_int_120, group.by="bio_sample")
+plot2 <- UMAPPlot(seurat_int_120, group.by="bio_sample")
+plot1 + plot2
+```
+
+```{r}
+plot1 <- DimPlot(seurat_int_60, reduction = "umap", label = TRUE)
+plot2 <- DimPlot(seurat_int_120, reduction = "umap", label = TRUE)
+plot1 + plot2
+```
+
+```{r}
+seurat_int_60[["RNA"]] <- as(seurat_int_60[["RNA"]], Class = "Assay")
+class(seurat_int_60[["RNA"]])
+seurat_int_120[["RNA"]] <- as(seurat_int_120[["RNA"]], Class = "Assay")
+class(seurat_int_120[["RNA"]])
+```
+
+```{r, fig.width=37, fig.height=16}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+ct_markers <- c("MKI67", "TOP2A", "PCNA", "CDK1", #cell cycle
+"SOX2", "HES1", #dorsal forebrain progenitors 
+"NEUROD2", "NEUROD6", #dorsal excitatory neurons
+"GADD45G", "SSTR2", #neuronal migration 
+"EMX1", "SOX2", "HES1", #neural progenitors, apical radial glia (aRG) 
+"EMX1", "EOMES", "INSM1", #neural progenitors, intermediate progenitors (IP) 
+"EMX2", "FOXP2", "EOMES", #the first neurons populating the developing cortical plate (preplate/subplate) 
+"SOX2", "HOPX", "PEA15", "LGALS3BP", "MOXD1", #outer radial glia (oRG) 
+"FEZF1", "NEUROD2", "NEUROD6", "TBR1", "PDE1A", #immature deep-layer projection neurons (DL PN) 
+"SOX5", "LDB2", "CRYM", "TLE4", "BCL11B", "FEZF2", #deep-layer corticofugal projection neurons (CFuPN)
+"UNC5A", "EPHA4", "BHLHE22", "PLXNA4", "SATB2", "CUX2", #callosal projection neurons (CPN) 
+"GJA1", "S100B", "SPARC", "APOE", "AQP4", #glial cells with molecular features characteristic of astroglia
+"OLIG1", "OLIG2", "PDGFRA", "EGFR", #oligodendrocyte precursors
+"BIRC5", "DLX2", "DLX5", #cycling interneuron progenitors 
+"GAD2", "DLX2", "DLX5", #immature interneurons 
+"LAMP5", "LHX5", "GAD2", #subcortical interneurons
+"PAX2", "CRABP1", "CRABP2", "TFAP2A", #subcortical interneurons, markers characteristic of caudal regions of the neural tube, i.e., hindbrain 
+"FOXG1") #telencephalon / interneurons that appear after 4 months in culture
+plot1 <- DoHeatmap(seurat_int_60, features = ct_markers) + guides(colour=FALSE)
+plot2 <- DoHeatmap(seurat_int_120, features = ct_markers) + guides(colour=FALSE)
+plot1 / plot2
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+cl_markers_60 <- FindAllMarkers(seurat_int_60, only.pos = TRUE, min.pct = 0.25, logfc.threshold = log(1.2))
+top10_cl_markers_60 <- cl_markers_60 %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+cl_markers_120 <- FindAllMarkers(seurat_int_120, only.pos = TRUE, min.pct = 0.25, logfc.threshold = log(1.2))
+top10_cl_markers_120 <- cl_markers_120 %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+```
+
+Cell cycle markers seem to have a significant effect on clustering. We want to get rid of this effect.
+60 CCNB1 in cluster 10
+60 MCM(10) in cluster 6
+60 RRM2 in cluster 12
+120 RRM2 in cluster 11
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+seurat_int_60 <- CellCycleScoring(seurat_int_60,
+ s.features = cc.genes$s.genes,
+ g2m.features = cc.genes$g2m.genes,
+ set.ident = TRUE)
+seurat_int_120 <- CellCycleScoring(seurat_int_120,
+ s.features = cc.genes$s.genes,
+ g2m.features = cc.genes$g2m.genes,
+ set.ident = TRUE)
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+FeaturePlot(seurat_int_60, features = c("S.Score", "G2M.Score"))
+FeaturePlot(seurat_int_120, features = c("S.Score", "G2M.Score"))
+```
+
+# Dealing with the cell cycle
+
+```{r}
+# DefaultAssay(seurat_int_60) <- "RNA"
+# DefaultAssay(seurat_int_120) <- "RNA"
+# VariableFeatures(seurat_int_60) <- setdiff(VariableFeatures(seurat_int_60), unlist(cc.genes))
+# VariableFeatures(seurat_int_120) <- setdiff(VariableFeatures(seurat_int_120), unlist(cc.genes))
+```
+
+```{r}
+# DefaultAssay(seurat_int_60) <- "integrated"
+# DefaultAssay(seurat_int_120) <- "integrated"
+# seurat_int_60 <- RunPCA(seurat_int_60, npcs = 50)
+# seurat_int_60 <- RunUMAP(seurat_int_60, dims = 1:30)
+# seurat_int_60 <- RunTSNE(seurat_int_60, dims = 1:30)
+# seurat_int_60 <- FindNeighbors(seurat_int_60, dims = 1:30) %>% FindClusters(resolution = 1)
+# seurat_int_120 <- RunPCA(seurat_int_120, npcs = 50)
+# seurat_int_120 <- RunUMAP(seurat_int_120, dims = 1:30)
+# seurat_int_120 <- RunTSNE(seurat_int_120, dims = 1:30)
+# seurat_int_120 <- FindNeighbors(seurat_int_120, dims = 1:30) %>% FindClusters(resolution = 1)
+```
+
+```{r}
+# plot1 <- UMAPPlot(seurat_int_60, group.by="bio_sample")
+# plot2 <- UMAPPlot(seurat_int_120, group.by="bio_sample")
+# plot1 + plot2
+```
+
+```{r}
+# plot1 <- DimPlot(seurat_int_60, reduction = "umap", label = TRUE)
+# plot2 <- DimPlot(seurat_int_120, reduction = "umap", label = TRUE)
+# plot1 + plot2
+```
+
+```{r}
+seurat_int_60[["RNA"]] <- as(seurat_int_60[["RNA"]], Class = "Assay")
+class(seurat_int_60[["RNA"]])
+seurat_int_120[["RNA"]] <- as(seurat_int_120[["RNA"]], Class = "Assay")
+class(seurat_int_120[["RNA"]])
+```
+
+```{r}
+# DefaultAssay(seurat_int_60) <- "RNA"
+# DefaultAssay(seurat_int_120) <- "RNA"
+# ct_markers <- c("MKI67", "TOP2A", "PCNA", "CDK1", #cell cycle
+# "SOX2", "HES1", #dorsal forebrain progenitors 
+# "NEUROD2", "NEUROD6", #dorsal excitatory neurons
+# "GADD45G", "SSTR2", #neuronal migration 
+# "EMX1", "SOX2", "HES1", #neural progenitors, apical radial glia (aRG) 
+# "EMX1", "EOMES", "INSM1", #neural progenitors, intermediate progenitors (IP) 
+# "EMX2", "FOXP2", "EOMES", #the first neurons populating the developing cortical plate (preplate/subplate) 
+# "SOX2", "HOPX", "PEA15", "LGALS3BP", "MOXD1", #outer radial glia (oRG) 
+# "FEZF1", "NEUROD2", "NEUROD6", "TBR1", "PDE1A", #immature deep-layer projection neurons (DL PN) 
+# "SOX5", "LDB2", "CRYM", "TLE4", "BCL11B", "FEZF2", #deep-layer corticofugal projection neurons (CFuPN)
+# "UNC5A", "EPHA4", "BHLHE22", "PLXNA4", "SATB2", "CUX2", #callosal projection neurons (CPN) 
+# "GJA1", "S100B", "SPARC", "APOE", "AQP4", #glial cells with molecular features characteristic of astroglia
+# "OLIG1", "OLIG2", "PDGFRA", "EGFR", #oligodendrocyte precursors
+# "BIRC5", "DLX2", "DLX5", #cycling interneuron progenitors 
+# "GAD2", "DLX2", "DLX5", #immature interneurons 
+# "LAMP5", "LHX5", "GAD2", #subcortical interneurons
+# "PAX2", "CRABP1", "CRABP2", "TFAP2A", #subcortical interneurons, markers characteristic of caudal regions of the neural tube, i.e., hindbrain 
+# "FOXG1") #telencephalon / interneurons that appear after 4 months in culture
+# plot1 <- DoHeatmap(seurat_int_60, features = ct_markers) + NoLegend()
+# plot2 <- DoHeatmap(seurat_int_120, features = ct_markers) + NoLegend()
+# plot1 + plot2
+```
+
+getting rid of cell cycle related genes from the identified highly variable gene list didn't seem to help much?
+
+```{r}
+DefaultAssay(seurat_int_60) <- "integrated"
+DefaultAssay(seurat_int_120) <- "integrated"
+seurat_int_60 <- ScaleData(seurat_int_60, vars.to.regress = c("S.Score", "G2M.Score"))
+seurat_int_120 <- ScaleData(seurat_int_120, vars.to.regress = c("S.Score", "G2M.Score"))
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "integrated"
+DefaultAssay(seurat_int_120) <- "integrated"
+seurat_int_60 <- RunPCA(seurat_int_60, npcs = 50)
+seurat_int_60 <- RunUMAP(seurat_int_60, dims = 1:30)
+seurat_int_60 <- FindNeighbors(seurat_int_60, dims = 1:30) %>% FindClusters(resolution = 0.6)
+seurat_int_120 <- RunPCA(seurat_int_120, npcs = 50)
+seurat_int_120 <- RunUMAP(seurat_int_120, dims = 1:30)
+seurat_int_120 <- FindNeighbors(seurat_int_120, dims = 1:30) %>% FindClusters(resolution = 0.6)
+```
+
+```{r, fig.width=37, fig.height=16}
+Idents(seurat_int_60) <- "seurat_clusters"
+Idents(seurat_int_120) <- "seurat_clusters"
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+ct_markers <- c("MKI67", "TOP2A", "PCNA", "CDK1", #cell cycle
+"SOX2", "HES1", #dorsal forebrain progenitors 
+"NEUROD2", "NEUROD6", #dorsal excitatory neurons
+"GADD45G", "SSTR2", #neuronal migration 
+"EMX1", "SOX2", "HES1", #neural progenitors, apical radial glia (aRG) 
+"EMX1", "EOMES", "INSM1", #neural progenitors, intermediate progenitors (IP) 
+"EMX2", "FOXP2", "EOMES", #the first neurons populating the developing cortical plate (preplate/subplate) 
+"SOX2", "HOPX", "PEA15", "LGALS3BP", "MOXD1", #outer radial glia (oRG) 
+"FEZF1", "NEUROD2", "NEUROD6", "TBR1", "PDE1A", #immature deep-layer projection neurons (DL PN) 
+"SOX5", "LDB2", "CRYM", "TLE4", "BCL11B", "FEZF2", #deep-layer corticofugal projection neurons (CFuPN)
+"UNC5A", "EPHA4", "BHLHE22", "PLXNA4", "SATB2", "CUX2", #callosal projection neurons (CPN) 
+"GJA1", "S100B", "SPARC", "APOE", "AQP4", #glial cells with molecular features characteristic of astroglia
+"OLIG1", "OLIG2", "PDGFRA", "EGFR", #oligodendrocyte precursors
+"BIRC5", "DLX2", "DLX5", #cycling interneuron progenitors 
+"GAD2", "DLX2", "DLX5", #immature interneurons 
+"LAMP5", "LHX5", "GAD2", #subcortical interneurons
+"PAX2", "CRABP1", "CRABP2", "TFAP2A", #subcortical interneurons, markers characteristic of caudal regions of the neural tube, i.e., hindbrain 
+"FOXG1") #telencephalon / interneurons that appear after 4 months in culture
+plot1 <- DoHeatmap(seurat_int_60, features = ct_markers) + guides(colour=FALSE)
+plot2 <- DoHeatmap(seurat_int_120, features = ct_markers) + guides(colour=FALSE)
+plot1 / plot2
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+cl_markers_60_after <- FindAllMarkers(seurat_int_60, only.pos = TRUE, min.pct = 0.25, logfc.threshold = log(1.2))
+top10_cl_markers_60_after <- cl_markers_60_after %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+cl_markers_120_after <- FindAllMarkers(seurat_int_120, only.pos = TRUE, min.pct = 0.25, logfc.threshold = log(1.2))
+top10_cl_markers_120_after <- cl_markers_120_after %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+```
+
+60 RRM2 in cluster 12
+120 RRM2 in cluster 10
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+FeaturePlot(seurat_int_60, features = c("S.Score", "G2M.Score"))
+FeaturePlot(seurat_int_120, features = c("S.Score", "G2M.Score"))
+```
+
+
+
+
+
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+```
+
+```{r}
+seurat_int_60[["RNA"]] <- as(seurat_int_60[["RNA"]], Class = "Assay")
+class(seurat_int_60[["RNA"]])
+seurat_int_120[["RNA"]] <- as(seurat_int_120[["RNA"]], Class = "Assay")
+class(seurat_int_120[["RNA"]])
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+seurat_int_60 <- CellCycleScoring(seurat_int_60,
+ s.features = cc.genes$s.genes,
+ g2m.features = cc.genes$g2m.genes,
+ set.ident = TRUE)
+seurat_int_120 <- CellCycleScoring(seurat_int_120,
+ s.features = cc.genes$s.genes,
+ g2m.features = cc.genes$g2m.genes,
+ set.ident = TRUE)
+```
+
+```{r, fig.width=10, fig.height=10}
+p1 <- VlnPlot(
+  seurat_int_60,
+  features = "S.Score",
+  group.by = "seurat_clusters",
+  pt.size = 0
+) +
+  geom_jitter(size = 0.2, alpha = 0.08, width = 0.3) +
+  ggtitle("S.Score")
+
+p2 <- VlnPlot(
+  seurat_int_60,
+  features = "G2M.Score",
+  group.by = "seurat_clusters",
+  pt.size = 0
+) +
+  geom_jitter(size = 0.2, alpha = 0.08, width = 0.3) +
+  ggtitle("G2M.Score")
+
+p1 + p2
+```
+
+```{r, fig.width=10, fig.height=10}
+VlnPlot(seurat_int_60, features = c("S.Score", "G2M.Score"), group.by = "seurat_clusters", pt.size = 0)
+FeaturePlot(seurat_int_60, features = c("S.Score", "G2M.Score"), ncol = 2)
+DimPlot(seurat_int_60, reduction = "umap", group.by = "Phase")
+table(seurat_int_60$seurat_clusters, seurat_int_60$Phase)
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "RNA"
+DefaultAssay(seurat_int_120) <- "RNA"
+
+```
+
+```{r}
+seurat_int_60[["RNA"]] <- as(seurat_int_60[["RNA"]], Class = "Assay")
+class(seurat_int_60[["RNA"]])
+seurat_int_120[["RNA"]] <- as(seurat_int_120[["RNA"]], Class = "Assay")
+class(seurat_int_120[["RNA"]])
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "integrated"
+DefaultAssay(seurat_int_120) <- "integrated"
+seurat_int_60 <- ScaleData(seurat_int_60, vars.to.regress = c("S.Score", "G2M.Score"))
+seurat_int_120 <- ScaleData(seurat_int_120, vars.to.regress = c("S.Score", "G2M.Score"))
+```
+
+```{r}
+DefaultAssay(seurat_int_60) <- "integrated"
+DefaultAssay(seurat_int_120) <- "integrated"
+seurat_int_60 <- RunPCA(seurat_int_60, npcs = 50)
+seurat_int_60 <- RunUMAP(seurat_int_60, dims = 1:30)
+seurat_int_60 <- FindNeighbors(seurat_int_60, dims = 1:30) %>% FindClusters(resolution = 0.6)
+seurat_int_120 <- RunPCA(seurat_int_120, npcs = 50)
+seurat_int_120 <- RunUMAP(seurat_int_120, dims = 1:30)
+seurat_int_120 <- FindNeighbors(seurat_int_120, dims = 1:30) %>% FindClusters(resolution = 0.6)
+```
+
+
+
+seurat_int_60_cc <- ScaleData(seurat_int_60_cc, vars.to.regress = c("S.Score", "G2M.Score"))
+seurat_int_60_cc <- RunPCA(seurat_int_60_cc, npcs = 50)
+seurat_int_60_cc <- RunUMAP(seurat_int_60_cc, dims = 1:30)
+seurat_int_60_cc <- RunTSNE(seurat_int_60_cc, dims = 1:30)
+seurat_int_60_cc <- FindNeighbors(seurat_int_60_cc, dims = 1:30) %>%
+  FindClusters(resolution = 0.6)
+
+DefaultAssay(seurat_int_60_cc) <- "RNA"
+
+# Compare before vs after regression
+plot1 <- DimPlot(seurat_int_60, reduction = "umap", label = TRUE)
+plot2 <- DimPlot(seurat_int_60_cc, reduction = "umap", label = TRUE)
+plot1 + plot2
+
+# Phase distribution before regression
+DimPlot(seurat_int_60_phase, reduction = "umap", group.by = "Phase")
+
+# Optional marker checks after regression
+FeaturePlot(seurat_int_60_cc, c("MKI67", "GLI3", "EOMES", "NEUROD6"), ncol = 4)
+
+plot1 <- UMAPPlot(seurat_int_60_cc, group.by = "bio_sample")
+plot2 <- UMAPPlot(seurat_int_60_cc, label = TRUE)
+plot3 <- FeaturePlot(seurat_int_60_cc, c("SOX2", "STMN2", "HOPX", "SYT1"), ncol = 2, pt.size = 0.1)
+((plot1 / plot2) | plot3) + plot_layout(widths = c(1, 2))
+
+
+
+
+
