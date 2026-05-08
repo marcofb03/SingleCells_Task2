@@ -85,7 +85,8 @@ lapply(seurat_list, function(x) {
 })
 ```
 
-Data Integration: YES or NO ?
+Data Integration: YES or NO 
+Is there a batch effects ? If cells of the same known type (e.g., progenitors or neurons/genes signature) from different replicates (only between WT or betw KO) fail to intermix on a UMAP or t-SNE plot, a batch effect is likely present.
 ```{r}
 # Merge all samples without integration
 seurat_merged <- merge(x = seurat_list$B1_17_1_day21, 
@@ -105,13 +106,183 @@ DimPlot(seurat_merged, group.by = "sample")
 # Plot by condition
 DimPlot(seurat_merged, group.by = "condition")
 
-p <- FeaturePlot(seurat_test, 
-                     c("PECAM1", "VWF", "CD34", "KDR", "TEK", "CLDN5"), 
-                     ncol = 2, 
-                     pt.size = 0.1)
+# Subset for WT and plot
+DimPlot(subset(seurat_merged, subset = condition == "WT"), 
+                group.by = "sample", 
+                pt.size = 0.5) + ggtitle("Wild Type Samples")
 
-p
+# Subset for KO and plot
+DimPlot(subset(seurat_merged, subset = condition == "KO"), 
+                group.by = "sample", 
+                pt.size = 0.5) + ggtitle("KO Samples")
 
+# Subset the object to only include Wild Type samples or KO
+seurat_wt <- subset(seurat_merged, subset = condition == "WT")
+seurat_ko <- subset(seurat_merged, subset = condition == "KO")
+
+# --- WILD TYPE (WT) SAMPLES ---
+FeaturePlot(seurat_wt, features = "POU5F1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "MIXL1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "EOMES", split.by = "sample")
+FeaturePlot(seurat_wt, features = "HAND1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "MKI67", split.by = "sample")
+FeaturePlot(seurat_wt, features = "ETV2", split.by = "sample")
+FeaturePlot(seurat_wt, features = "TFPI2", split.by = "sample")
+FeaturePlot(seurat_wt, features = "NRP2", split.by = "sample")
+FeaturePlot(seurat_wt, features = "KDR", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CLDN5", split.by = "sample")
+FeaturePlot(seurat_wt, features = "PECAM1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "GJA4", split.by = "sample")
+FeaturePlot(seurat_wt, features = "GJA5", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CXCR4", split.by = "sample")
+FeaturePlot(seurat_wt, features = "NR2F2", split.by = "sample")
+FeaturePlot(seurat_wt, features = "APLNR", split.by = "sample")
+FeaturePlot(seurat_wt, features = "PRCP", split.by = "sample")
+FeaturePlot(seurat_wt, features = "DCN", split.by = "sample")
+FeaturePlot(seurat_wt, features = "DLK1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "SULF1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "COL4A1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "ACTA2", split.by = "sample")
+FeaturePlot(seurat_wt, features = "LUM", split.by = "sample")
+FeaturePlot(seurat_wt, features = "PDGFRB", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CSPG4", split.by = "sample")
+
+# --- KNOCKOUT (KO) SAMPLES ---
+FeaturePlot(seurat_ko, features = "POU5F1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "MIXL1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "EOMES", split.by = "sample")
+FeaturePlot(seurat_ko, features = "HAND1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "MKI67", split.by = "sample")
+FeaturePlot(seurat_ko, features = "ETV2", split.by = "sample")
+FeaturePlot(seurat_ko, features = "TFPI2", split.by = "sample")
+FeaturePlot(seurat_ko, features = "NRP2", split.by = "sample")
+FeaturePlot(seurat_ko, features = "KDR", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CLDN5", split.by = "sample")
+FeaturePlot(seurat_ko, features = "PECAM1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "GJA4", split.by = "sample")
+FeaturePlot(seurat_ko, features = "GJA5", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CXCR4", split.by = "sample")
+FeaturePlot(seurat_ko, features = "NR2F2", split.by = "sample")
+FeaturePlot(seurat_ko, features = "APLNR", split.by = "sample")
+FeaturePlot(seurat_ko, features = "PRCP", split.by = "sample")
+FeaturePlot(seurat_ko, features = "DCN", split.by = "sample")
+FeaturePlot(seurat_ko, features = "DLK1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "SULF1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "COL4A1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "ACTA2", split.by = "sample")
+FeaturePlot(seurat_ko, features = "LUM", split.by = "sample")
+FeaturePlot(seurat_ko, features = "PDGFRB", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CSPG4", split.by = "sample")
+```
+
+Data Integration
+```{r}
+counts_int <- readMM("counts.mtx")
+meta_int <- read.table("meta.tsv")
+features_int <- read.table("features.tsv")[,1]
+dimnames(counts_int) <- list(features_int, rownames(meta_int))
+seurat_int <- CreateSeuratObject(counts = counts_int, meta.data = meta_int)
+#Splitting dataset
+seurat_list_int <- SplitObject(seurat_int, split.by = "sample") #KO vs WT
+```
+
+Filtering
+```{r}
+seurat_list_int <- lapply(seurat_list_int, function(x) {
+  x[["percent.mt"]] <- PercentageFeatureSet(x, pattern = "^MT[-\\.]")
+  x
+})
+
+seurat_list_int <- lapply(seurat_list_int, function(x) {
+  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 3500 & percent.mt < 10)
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, nfeatures = 3000)
+  x
+})
+```
+
+FindIntegrationAnchors
+```{r}
+seurat_list_KO = seurat_list_int[c("B1_17_1_day21", "D2_22_3_day21")]
+seurat_list_WT = seurat_list_int[c("wt_2_day21", "wt_4_day21")]
+anchorsKO <- FindIntegrationAnchors(object.list = seurat_list_KO, dims = 1:15)
+anchorsWT <- FindIntegrationAnchors(object.list = seurat_list_WT, dims = 1:15)
+```
+
+IntegrateData
+```{r}
+seurat_int_KO <- IntegrateData(anchorsKO, dims = 1:15)
+seurat_int_WT <- IntegrateData(anchorsWT, dims = 1:15)
+```
+
+```{r}
+seurat_int_KO <- ScaleData(seurat_int_KO)
+seurat_int_KO <- RunPCA(seurat_int_KO, npcs = 15)
+seurat_int_KO <- RunUMAP(seurat_int_KO, dims = 1:15)
+seurat_int_KO <- RunTSNE(seurat_int_KO, dims = 1:15)
+seurat_int_KO <- FindNeighbors(seurat_int_KO, dims = 1:15) %>% FindClusters(resolution = 0.6)
+```
+
+```{r}
+seurat_int_WT <- ScaleData(seurat_int_WT)
+seurat_int_WT <- RunPCA(seurat_int_WT, npcs = 15)
+seurat_int_WT <- RunUMAP(seurat_int_WT, dims = 1:15)
+seurat_int_WT <- RunTSNE(seurat_int_WT, dims = 1:15)
+seurat_int_WT <- FindNeighbors(seurat_int_WT, dims = 1:15) %>% FindClusters(resolution = 0.6)
+```
+
+```{r}
+DefaultAssay(seurat_int_WT) <- "integrated" #RNA for analysis (real counts) and integrated for visualization (corrected counts)
+plot1 <- UMAPPlot(seurat_int_WT, group.by="sample")
+plot2 <- UMAPPlot(seurat_int_WT, label = T)
+
+# Use the real RNA expression values
+DefaultAssay(seurat_int_WT) <- "RNA"
+# FeaturePlot will now pull expression from the RNA assay,
+# but the UMAP layout is the one computed from the integrated assay
+plot3 <- FeaturePlot(seurat_int_WT, c("PECAM1","CD34","CLDN5"), ncol = 2, pt.size = 0.1)
+((plot1 / plot2) | plot3) + plot_layout(width = c(1,2))
+```
+
+```{r}
+DefaultAssay(seurat_int_KO) <- "integrated"
+plot1 <- UMAPPlot(seurat_int_KO, group.by="sample")
+plot2 <- UMAPPlot(seurat_int_KO, label = T)
+
+# Use the real RNA expression values
+DefaultAssay(seurat_int_WT) <- "RNA"
+# FeaturePlot will now pull expression from the RNA assay,
+# but the UMAP layout is the one computed from the integrated assay
+plot3 <- FeaturePlot(seurat_int_KO, c("PECAM1","CD34","CLDN5"), ncol = 2, pt.size = 0.1)
+((plot1 / plot2) | plot3) + plot_layout(width = c(1,2))
+```
+
+```{r}
+saveRDS(seurat_int_KO, file="seurat_int_KO.rds")
+saveRDS(seurat_int_WT, file="seurat_int_WT.rds")
+```
+
+Cluster Annotation
+```{r}
+DefaultAssay(seurat_int_WT) <- "RNA"
+DefaultAssay(seurat_int_KO) <- "RNA"
+
+ct_markers <- c(
+  "POU5F1", # pluripotent stem cells
+  "MIXL1", "EOMES", "HAND1", # mesoderm progenitors
+  "MKI67", # cell cycle / proliferation
+  "ETV2", # early endothelial progenitors
+  "TFPI2", "NRP2", # late endothelial progenitors
+  "KDR", "CLDN5", "PECAM1", # mature endothelial cells
+  "GJA4", "GJA5", "CXCR4", # arterial-like endothelial
+  "NR2F2", "APLNR", "PRCP", # venous-like endothelial
+  "DCN", "DLK1", "SULF1", "COL4A1", # general mural cells
+  "ACTA2", "LUM", # vascular smooth muscle cells
+  "PDGFRB", "CSPG4" # pericytes
+)
+
+DoHeatmap(seurat_int_WT, features = ct_markers) + guides(colour=FALSE)
+DoHeatmap(seurat_int_KO, features = ct_markers) + guides(colour=FALSE)
 ```
 
 
