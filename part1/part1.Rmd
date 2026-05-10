@@ -15,6 +15,7 @@ library(Matrix)
 library(patchwork)
 library(dplyr)
 library(ggplot2)
+library(pheatmap)
 
 options(Seurat.object.assay.version = "v3")
 ```
@@ -83,6 +84,7 @@ lapply(seurat_list, function(x) {
 lapply(seurat_list, function(x) {
   PCHeatmap(x, dims = 1:15, cells = 500, balanced = TRUE, ncol = 4)
 })
+message("PCA done")
 ```
 
 Data Integration: YES or NO 
@@ -173,6 +175,9 @@ FeaturePlot(seurat_ko, features = "ACTA2", split.by = "sample")
 FeaturePlot(seurat_ko, features = "LUM", split.by = "sample")
 FeaturePlot(seurat_ko, features = "PDGFRB", split.by = "sample")
 FeaturePlot(seurat_ko, features = "CSPG4", split.by = "sample")
+
+saveRDS(seurat_merged, file="seurat_merged.rds")
+message("Part1 Integration done - File saved")
 ```
 
 Data Integration
@@ -255,34 +260,204 @@ DefaultAssay(seurat_int_WT) <- "RNA"
 # but the UMAP layout is the one computed from the integrated assay
 plot3 <- FeaturePlot(seurat_int_KO, c("PECAM1","CD34","CLDN5"), ncol = 2, pt.size = 0.1)
 ((plot1 / plot2) | plot3) + plot_layout(width = c(1,2))
+
+message("Part2 Integration done")
 ```
 
-```{r}
-saveRDS(seurat_int_KO, file="seurat_int_KO.rds")
-saveRDS(seurat_int_WT, file="seurat_int_WT.rds")
-```
 
-Cluster Annotation
+Cluster Annotation based on manually curated genes (Supplementary Table 1 and others added)
 ```{r}
-DefaultAssay(seurat_int_WT) <- "RNA"
-DefaultAssay(seurat_int_KO) <- "RNA"
+# choose Seurat Object to use
+seurat_obj <- seurat_int_KO   # seurat_int_WT or seurat_int_KO
 
-ct_markers <- c(
-  "POU5F1", # pluripotent stem cells
-  "MIXL1", "EOMES", "HAND1", # mesoderm progenitors
-  "MKI67", # cell cycle / proliferation
-  "ETV2", # early endothelial progenitors
-  "TFPI2", "NRP2", # late endothelial progenitors
-  "KDR", "CLDN5", "PECAM1", # mature endothelial cells
-  "GJA4", "GJA5", "CXCR4", # arterial-like endothelial
-  "NR2F2", "APLNR", "PRCP", # venous-like endothelial
-  "DCN", "DLK1", "SULF1", "COL4A1", # general mural cells
-  "ACTA2", "LUM", # vascular smooth muscle cells
-  "PDGFRB", "CSPG4" # pericytes
+# List of your genes -> from paper and manually added
+genes_of_interest <- c(
+  "POU5F1", "THRB", "MKI67", "HAND2", "BAMBI", "LUM", "DCN", "DLK1", 
+  "ETV2", "MAML1", "PITX1", "SPRY1", "TRPS1", "SNAI2", "PDGFRB", "CSPG4", 
+  "ANGPT2", "MATN4", "MIXL1", "DLL3", "SULF1", "COL4A1", "LOX", "KRT19", 
+  "WNT5A", "NID2", "POSTN", "IGFBP3", "COL5A1", "HES2", "HRH1", "SMAD3", 
+  "RGCC", "PLAUR", "IGFBP5", "NR3C1", "GATA6", "SGK1", "DKK1", "CRABP1", 
+  "HEY1", "DLL4", "VWF", "CLDN5", "CXCR4", "GJA4", "GJA5", "SEMA3G", 
+  "MCAM", "WFDC2", "DLL1", "ARL4A", "ZFPM2", "HES1", "PRDM1", "FOXO1", 
+  "ESM1", "MECOM", "PECAM1", "ADM", "SOX18", "ERG", "PDGFB", "MMRN1", 
+  "CDH5", "DUSP23", "CFD", "SOX7", "KDR", "ROBO4", "PLVAP", "FLI1", 
+  "HHEX", "GATA2", "ELK3", "LEF1", "CPE", "EPCAM", "HES4", "PDGFA", 
+  "RGS5", "PGF", "HES5", "MYC", "RBPJ", "EP300", "SPINT2", "ZEB2", 
+  "EBF1", "NR2F2", "NRP2", "APLNR", "ZEB1", "ADAMTS18", "NTS", "NEFH", 
+  "LY6H", "RGS16", "HAND1", "KCNE3", "TFPI2", "MESP1", "MESP2", "PTPRC", 
+  "ALDH1A1", "CTGF", "FOXQ1", "PAX3", "AQP4", "ANKRD1", "TAGLN", "ACTA2"
 )
 
-DoHeatmap(seurat_int_WT, features = ct_markers) + guides(colour=FALSE)
-DoHeatmap(seurat_int_KO, features = ct_markers) + guides(colour=FALSE)
+#Keep only genes that exist in your Seurat object and get average expression per cluster 
+genes_present <- intersect(genes_of_interest, rownames(seurat_obj))
+avg_expr <- AverageExpression(seurat_obj, features = genes_present, group.by = "seurat_clusters", slot = "data")
+avg_matrix <- as.matrix(avg_expr$RNA)
+z_score <- t(scale(t(avg_matrix)))
+colnames(z_score) <- gsub("g", "", colnames(z_score)) #"g0" becomes "0", for style
+# Manually ordered to obtain a red diagonal
+my_cluster_order <- c("0", "2", "9", "3", "8", "5",   
+                      "1", "7", "4", "10", "6", "11") 
+my_order <- intersect(my_cluster_order, colnames(z_score))
+z_score_ordered <- z_score[, my_order]
+var_sub <- apply(z_score_ordered, 1, var, na.rm = TRUE)
+z_score_ordered <- z_score_ordered[var_sub > 0 & !is.na(var_sub), ]
+
+# heatmap
+h <- pheatmap(z_score_ordered,
+         scale = "none",
+         cluster_rows = TRUE,      # Keeps your custom order
+         cluster_cols = FALSE, 
+         treeheight_row = 0,        # Deletes the row dendrogram
+         treeheight_col = 0,        # Deletes the column dendrogram (if any)
+         fontsize_row = 5,          # Prevents name overlap
+         height = 2,
+         angle_col = 0,             # Keeps cluster names horizontal
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         main = "Z-scored gene expression per cluster ")
+
+# Save pdf
+ggsave("heatmap.pdf", plot = h, width = 12, height = 8, dpi=600,  bg = "white")
+
+# Printing cluster's marker gene to ask LLMs which tissue corresponds
+genes_main <- apply(z_score_ordered, 2, function(x) {
+names(x[x > 2]) })  #Filter Z-score > 2
+genes_minor <- apply(z_score_ordered, 2, function(x) {
+names(x[x > 1 & x < 2]) }) #Filter z-score > 1 & z-score < 2
+
+# Print main and minor genes per cluster -> ASK LLMs to get cell type and cell state (if inferable)
+print(genes_main)
+print(genes_minor)
+
 ```
+
+Cell Annotation Assignment
+```{r}
+# --------------- WT cluster identity --------------- #
+Idents(seurat_int_WT) <- "seurat_clusters"
+new_cluster_ids <- c(
+  "0" = "Fibroblast-like Mural",
+  "1" = "Mature Mural",
+  "2" = "Epicardial Progenitors",
+  "3" = "Epicardial-like",
+  "4" = "Neural Crest",
+  "5" = "Mesoderm Progenitors",
+  "6" = "Venous/Capillary ECs",
+  "7" = "Capillary/Tip-like",
+  "8" = "Mural Progenitors",
+  "9" = "Proliferating Pluripotent",
+  "10" = "Neuromesoderm-like",
+  "11" = "Pan-Endothelial"
+)
+seurat_int_WT <- RenameIdents(seurat_int_WT, new_cluster_ids)
+seurat_int_WT$cell_type <- Idents(seurat_int_WT)
+
+# --------------- KO cluster identity --------------- #
+Idents(seurat_int_KO) <- "seurat_clusters"
+new_cluster_ids <- c(
+  "0"  = "Epicardial-like",
+  "1"  = "Fibroblast-like Mural",
+  "2"  = "Unknown",
+  "3"  = "Mural Progenitors",
+  "4"  = "Mixed Off-Target Progenitors (NM/Epi/NC)",
+  "5"  = "Neural Crest",
+  "6"  = "Mesoderm Progenitors",
+  "7"  = "Proliferating Epicardial Progenitors",
+  "8"  = "Contractile pericytes",
+  "9"  = "Proliferating Arterial Endothelial",
+  "10" = "Pan-Endothelial"
+)
+seurat_int_KO <- RenameIdents(seurat_int_KO, new_cluster_ids)
+seurat_int_KO$cell_type <- Idents(seurat_int_KO)
+
+# plots with annotation
+DimPlot(seurat_int_WT, reduction = "umap", label = FALSE) + ggtitle("WT Day 21 Clusters")
+DimPlot(seurat_int_KO, reduction = "umap", label = FALSE) + ggtitle("MECOM KO Day 21 Clusters")
+```
+
+# Report from Gemini Pro 3.1 about its cell annotation reasoning
+
+WT (seurat_int_WT)
+Cluster 0: Fibroblast-like Mural Cells** (Core markers: *DCN, IGFBP5, TRPS1*).
+Cluster 1: Mature Mural Cells / ECM** (Matrix heavy: *COL5A1, POSTN, COL4A1*).
+Cluster 2: Epicardial / Lateral Plate Mesoderm Progenitors** (Core markers: *HAND1, KCNE3*).
+Cluster 3: Epicardial-like / Mesothelial** (Core markers: *EPCAM, ADAMTS18, DLK1*).
+Cluster 4: Neural Crest** (Core markers: *PAX3, FOXQ1, AQP4*).
+Cluster 5: Early Mesoderm Progenitor** (Core markers: *MIXL1, HAND1*).
+Cluster 6: Venous / Capillary Endothelial Cells** (Core EC markers mixed with *NRP2, ARL4A, NR2F2*).
+Cluster 7: Capillary / Tip-like Cells** (Confidence: Low. *RGCC* indicates capillary, but weak overall signature).
+Cluster 8: Mural Progenitors / Pericytes** (Core markers: *PDGFRB, CSPG4, RGS5*).
+Cluster 9: Proliferating Pluripotent Cells** (Core markers: *POU5F1, MKI67*).
+Cluster 10: Neuromesoderm-like / Somitic** (Core markers: *MESP1, MESP2*).
+Cluster 11: Pan-Endothelial (Arterial dominant)** (Massive definitive EC signature: *PECAM1, CDH5, DLL4, GJA5*).
+
+KO (seurat_int_KO)
+Cluster 0: Epicardial-like / Mesenchymal Progenitor
+Main Markers: KCNE3, IGFBP3.
+Minor Markers: DLK1, KRT19, LUM, COL5A1.
+Cluster 1: Fibroblast-like Mural Cells / ECM (Matrix-producing Mural Cells)
+Main Markers: WNT5A
+Minor Markers: POSTN, COL4A1, COL5A1, SULF1, LOX.
+Cluster 2: Unknown
+Main Markers: None.
+Cluster 3: Early Mural Progenitors
+Main Markers: ADAMTS18
+Minor Markers: PDGFRB, DCN, ETV2.
+Cluster 4: Mixed Off-Target Progenitors -  Neuromesoderm (MESP1/2, DLL3), Epithelial/Endoderm (EPCAM), and Neural Crest (CRABP1)
+Main Markers: EPCAM, MIXL1, MESP1, MESP2, DLL3, CRABP1, PTPRC.
+Cluster 5: Neural Crest / Mesenchymal
+Main Markers: PAX3
+Minor Markers: TRPS1, HAND2, IGFBP5, CSPG4.
+Cluster 6: Early Mesoderm Progenitors
+Main Markers: None
+Minor Markers: MIXL1, HAND1, ETV2.
+Cluster 7: Proliferating Epicardial Progenitors
+Main Markers: None
+Minor Markers: PITX1, HAND1, MKI67, MATN4.
+Cluster 8: Contractile / Mature Mural Cells (Pericytes/SMCs)
+Main Markers: TAGLN, ACTA2 (->Mature and conctractile state), ANKRD1, COL4A1, PDGFA.
+Minor Markers: POSTN, MCAM, SNAI2.
+Cluster 9: Proliferating Arterial Endothelial Cells
+Main Markers: MKI67.
+Minor: GJA5 (arterial marker).
+Cluster 10: Pan-Endothelial Cells
+Main Markers: PECAM1, CDH5, KDR, FLI1, ERG (Core EC), DLL4, GJA5, CXCR4 (Arterial), VWF, NRP2 (Venous), PRDM1, PLVAP (Capillary)
+
+Save for Pyhton
+```{r}
+# ------------------- export to R ------------------- #
+saveRDS(seurat_int_KO, file="seurat_int_KO.rds")
+saveRDS(seurat_int_WT, file="seurat_int_WT.rds")
+# --------------------------------------------------- #
+
+
+# ------------------- export to python ------------------- #
+library(SingleCellExperiment)
+library(zellkonverter)
+
+DefaultAssay(seurat_int_KO) <- "RNA"
+seurat_int_KO <- JoinLayers(seurat_int_KO)
+sce_ko <- as.SingleCellExperiment(seurat_int_KO)
+reducedDim(sce_ko, "UMAP") <- Embeddings(seurat_int_KO, "umap")
+reducedDim(sce_ko, "PCA") <- Embeddings(seurat_int_KO, "pca")
+writeH5AD(sce_ko, "seurat_int_KO.h5ad")
+
+DefaultAssay(seurat_int_WT) <- "RNA"
+seurat_int_WT <- JoinLayers(seurat_int_WT)
+sce_wt <- as.SingleCellExperiment(seurat_int_WT)
+reducedDim(sce_wt, "UMAP") <- Embeddings(seurat_int_WT, "umap")
+reducedDim(sce_wt, "PCA") <- Embeddings(seurat_int_WT, "pca")
+writeH5AD(sce_wt, "seurat_int_WT.h5ad")
+# -------------------------------------------------------- #
+```
+
+
+
+
+
+
+
+
+
+
 
 
