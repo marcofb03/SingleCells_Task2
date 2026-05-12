@@ -1,21 +1,28 @@
 ---
 title: "part1"
 output: html_document
-date: "2026-05-07"
+date: "`r Sys.Date()`"
 ---
 
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# This sets the directory for ALL subsequent chunks
+knitr::opts_knit$set(root.dir = '/Users/marco/Desktop/SingleCells/part1')
 ```
 
 
 ```{r}
-library(Seurat)
-library(Matrix)
-library(patchwork)
-library(dplyr)
-library(ggplot2)
-library(pheatmap)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(Matrix)
+  library(patchwork)
+  library(dplyr)
+  library(ggplot2)
+  library(pheatmap)
+  library(SingleCellExperiment)
+  library(zellkonverter)
+  #library(simspec)
+})
 
 options(Seurat.object.assay.version = "v3")
 ```
@@ -35,7 +42,6 @@ cat("Cells:", ncol(counts), "\n")
 
 # Look at your metadata 
 table(meta$sample, meta$condition)
-
 ``` 
 Split by sample -> 4 sample/seurat
 ```{r}
@@ -60,7 +66,7 @@ lapply(seurat_list, function(x) {
 
 #Filter the cells by fixed threshold and find most 3000 differentially expressed genes
 seurat_list <- lapply(seurat_list, function(x) {
-  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 3500 & percent.mt < 10)
+  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 6000 & percent.mt < 10)
   x <- NormalizeData(x)
   x <- FindVariableFeatures(x, nfeatures = 3000)
   x <- ScaleData(x, vars.to.regress = c("nFeature_RNA", "percent.mt"))
@@ -124,17 +130,45 @@ seurat_wt <- subset(seurat_merged, subset = condition == "WT")
 seurat_ko <- subset(seurat_merged, subset = condition == "KO")
 
 # --- WILD TYPE (WT) SAMPLES ---
-FeaturePlot(seurat_wt, features = "TFPI2", split.by = "sample")
-FeaturePlot(seurat_wt, features = "GJA5", split.by = "sample")
+FeaturePlot(seurat_wt, features = "MKI67", split.by = "sample")
+FeaturePlot(seurat_wt, features = "TOP2A", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CDK1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CCNB1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "PCNA", split.by = "sample")
+FeaturePlot(seurat_wt, features = "RRM2", split.by = "sample")
 
 # --- KNOCKOUT (KO) SAMPLES ---
-FeaturePlot(seurat_ko, features = "KDR", split.by = "sample")
-FeaturePlot(seurat_ko, features = "ACTA2", split.by = "sample")
-
+FeaturePlot(seurat_ko, features = "MKI67", split.by = "sample")
+FeaturePlot(seurat_ko, features = "TOP2A", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CDK1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CCNB1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "PCNA", split.by = "sample")
+FeaturePlot(seurat_ko, features = "RRM2", split.by = "sample")
 
 saveRDS(seurat_merged, file="seurat_merged.rds")
 message("Part1 Integration done - File saved")
 ```
+
+```{r}
+
+# --- WILD TYPE (WT) SAMPLES ---
+FeaturePlot(seurat_wt, features = "MKI67", split.by = "sample")
+FeaturePlot(seurat_wt, features = "TOP2A", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CDK1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "CCNB1", split.by = "sample")
+FeaturePlot(seurat_wt, features = "PCNA", split.by = "sample")
+FeaturePlot(seurat_wt, features = "RRM2", split.by = "sample")
+
+# --- KNOCKOUT (KO) SAMPLES ---
+FeaturePlot(seurat_ko, features = "MKI67", split.by = "sample")
+FeaturePlot(seurat_ko, features = "TOP2A", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CDK1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "CCNB1", split.by = "sample")
+FeaturePlot(seurat_ko, features = "PCNA", split.by = "sample")
+FeaturePlot(seurat_ko, features = "RRM2", split.by = "sample")
+
+```
+
 
 Data Integration
 ```{r}
@@ -147,17 +181,23 @@ seurat_int <- CreateSeuratObject(counts = counts_int, meta.data = meta_int)
 seurat_list_int <- SplitObject(seurat_int, split.by = "sample") #KO vs WT
 ```
 
-Filtering
 ```{r}
 seurat_list_int <- lapply(seurat_list_int, function(x) {
   x[["percent.mt"]] <- PercentageFeatureSet(x, pattern = "^MT[-\\.]")
   x
 })
+```
 
+```{r}
 seurat_list_int <- lapply(seurat_list_int, function(x) {
-  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 3500 & percent.mt < 10)
+  x <- subset(x, subset = nFeature_RNA > 500 & nFeature_RNA < 6000 & percent.mt < 10)
   x <- NormalizeData(x)
   x <- FindVariableFeatures(x, nfeatures = 3000)
+  x <- CellCycleScoring(x, s.features = cc.genes.updated.2019$s.genes,
+                   g2m.features = cc.genes.updated.2019$g2m.genes)
+  VariableFeatures(x) <- setdiff(VariableFeatures(x),
+                                    c(unlist(cc.genes.updated.2019),
+                                    grep("^MT-", rownames(x), value=T)))
   x
 })
 ```
@@ -177,7 +217,7 @@ seurat_int_WT <- IntegrateData(anchorsWT, dims = 1:15)
 ```
 
 ```{r}
-seurat_int_KO <- ScaleData(seurat_int_KO)
+seurat_int_KO <- ScaleData(seurat_int_KO, vars.to.regress = c("G2M.Score","S.Score")) 
 seurat_int_KO <- RunPCA(seurat_int_KO, npcs = 15)
 seurat_int_KO <- RunUMAP(seurat_int_KO, dims = 1:15)
 seurat_int_KO <- RunTSNE(seurat_int_KO, dims = 1:15)
@@ -185,7 +225,7 @@ seurat_int_KO <- FindNeighbors(seurat_int_KO, dims = 1:15) %>% FindClusters(reso
 ```
 
 ```{r}
-seurat_int_WT <- ScaleData(seurat_int_WT)
+seurat_int_WT <- ScaleData(seurat_int_WT, vars.to.regress = c("G2M.Score","S.Score"))
 seurat_int_WT <- RunPCA(seurat_int_WT, npcs = 15)
 seurat_int_WT <- RunUMAP(seurat_int_WT, dims = 1:15)
 seurat_int_WT <- RunTSNE(seurat_int_WT, dims = 1:15)
@@ -220,15 +260,14 @@ plot3 <- FeaturePlot(seurat_int_KO, c("PECAM1","CD34","CLDN5"), ncol = 2, pt.siz
 message("Part2 Integration done")
 ```
 
-
 Cluster Annotation based on manually curated genes (Supplementary Table 1 and others added)
 ```{r}
 # choose Seurat Object to use
-seurat_obj <- seurat_int_KO   # seurat_int_WT or seurat_int_KO
+seurat_obj <- seurat_int_WT   # seurat_int_WT or seurat_int_KO
 
 # List of your genes -> from paper and manually added
 genes_of_interest <- c(
-  "POU5F1", "THRB", "MKI67", "HAND2", "BAMBI", "LUM", "DCN", "DLK1", 
+  "POU5F1", "THRB", "MKI67","MKI67", "TOP2A", "CDK1", "CCNB1", "PCNA", "RRM2", "HAND2", "BAMBI", "LUM", "DCN", "DLK1", 
   "ETV2", "MAML1", "PITX1", "SPRY1", "TRPS1", "SNAI2", "PDGFRB", "CSPG4", 
   "ANGPT2", "MATN4", "MIXL1", "DLL3", "SULF1", "COL4A1", "LOX", "KRT19", 
   "WNT5A", "NID2", "POSTN", "IGFBP3", "COL5A1", "HES2", "HRH1", "SMAD3", 
@@ -251,8 +290,7 @@ avg_matrix <- as.matrix(avg_expr$RNA)
 z_score <- t(scale(t(avg_matrix)))
 colnames(z_score) <- gsub("g", "", colnames(z_score)) #"g0" becomes "0", for style
 # Manually ordered to obtain a red diagonal
-my_cluster_order <- c("0", "2", "9", "3", "8", "5",   
-                      "1", "7", "4", "10", "6", "11") 
+my_cluster_order <- c("7", "10", "3", "9", "4", "6", "5", "1", "2", "8", "0", "11") 
 my_order <- intersect(my_cluster_order, colnames(z_score))
 z_score_ordered <- z_score[, my_order]
 var_sub <- apply(z_score_ordered, 1, var, na.rm = TRUE)
@@ -261,7 +299,7 @@ z_score_ordered <- z_score_ordered[var_sub > 0 & !is.na(var_sub), ]
 # heatmap
 h <- pheatmap(z_score_ordered,
          scale = "none",
-         cluster_rows = TRUE,      # Keeps your custom order
+         cluster_rows = TRUE,       # Keeps your custom order
          cluster_cols = FALSE, 
          treeheight_row = 0,        # Deletes the row dendrogram
          treeheight_col = 0,        # Deletes the column dendrogram (if any)
@@ -287,7 +325,7 @@ print(genes_minor)
 ```
 
 Cell Annotation Assignment
-```{r}
+```{r, include=FALSE, eval=FALSE}
 # --------------- WT cluster identity --------------- #
 Idents(seurat_int_WT) <- "seurat_clusters"
 new_cluster_ids <- c(
@@ -379,17 +417,13 @@ Cluster 10: Pan-Endothelial Cells
 Main Markers: PECAM1, CDH5, KDR, FLI1, ERG (Core EC), DLL4, GJA5, CXCR4 (Arterial), VWF, NRP2 (Venous), PRDM1, PLVAP (Capillary)
 
 Save for Pyhton
-```{r}
+```{r, include=FALSE, eval=FALSE}
 # ------------------- export to R ------------------- #
 saveRDS(seurat_int_KO, file="seurat_int_KO.rds")
 saveRDS(seurat_int_WT, file="seurat_int_WT.rds")
 # --------------------------------------------------- #
 
-
 # ------------------- export to python ------------------- #
-library(SingleCellExperiment)
-library(zellkonverter)
-
 DefaultAssay(seurat_int_KO) <- "RNA"
 seurat_int_KO <- JoinLayers(seurat_int_KO)
 sce_ko <- as.SingleCellExperiment(seurat_int_KO)
@@ -406,14 +440,256 @@ writeH5AD(sce_wt, "seurat_int_WT.h5ad")
 # -------------------------------------------------------- #
 ```
 
+Whole-Integration
+```{r}
+# From seurat_list_int already filtered
+anchors <- FindIntegrationAnchors(object.list = seurat_list_int, dims = 1:15)
+seurat_int_all <- IntegrateData(anchors, dims = 1:15)
+seurat_int_all <- ScaleData(seurat_int_all, vars.to.regress = c("G2M.Score","S.Score"))
+seurat_int_all <- RunPCA(seurat_int_all)
+seurat_int_all <- RunUMAP(seurat_int_all, dims = 1:15)
+seurat_int_all <- FindNeighbors(seurat_int_all, dims = 1:15)
+seurat_int_all <- FindClusters(seurat_int_all, resolution = 0.6)
+#saveRDS(seurat_int_all, file="seurat_int_all.rds") 
+
+# Plot whole-integration
+DimPlot(seurat_integrated, reduction = "umap", label = TRUE)
+DimPlot(seurat_integrated, reduction = "umap", group.by = "condition")
+DimPlot(seurat_integrated, reduction = "umap", split.by = "condition")
+
+# Histogram of WT/KO cell proportion per cluster
+counts <- table(seurat_integrated$seurat_clusters, seurat_integrated$condition)
+proportions <- as.data.frame(prop.table(counts, margin = 1))
+colnames(proportions) <- c("Cluster", "Condition", "Proportion")
+ggplot(proportions, aes(x = Cluster, y = Proportion, fill = Condition)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme_minimal() +
+  labs(y = "Fraction of Cells", title = "Proportion of WT vs KO per Cluster") +
+  scale_y_continuous(labels = scales::percent)
+```
+
+Cluster Annotation based on manually curated genes (Supplementary Table 1 and others added) - on whole Integration
+```{r}
+# choose Seurat Object to use
+seurat_obj <- cluster5_sub    # seurat_int_all #mixed_sub
+
+# List of your genes -> from paper and manually added
+genes_of_interest <- c(
+  "POU5F1", "NANOG", "THRB", "MKI67","MKI67", "TOP2A", "CDK1", "CCNB1", "PCNA", "RRM2", 
+  "HAND2", "BAMBI", "LUM", "DCN", "DLK1",
+  "ETV2", "MAML1", "PITX1", "SPRY1", "TRPS1", "SNAI2", "PDGFRB", "CSPG4", 
+  "ANGPT2", "MATN4", "MIXL1", "DLL3", "SULF1", "COL4A1", "LOX", "KRT19", 
+  "WNT5A", "NID2", "POSTN", "IGFBP3", "COL5A1", "HES2", "HRH1", "SMAD3", 
+  "RGCC", "PLAUR", "IGFBP5", "NR3C1", "GATA6", "SGK1", "DKK1", "CRABP1", 
+  "HEY1", "DLL4", "VWF", "CLDN5", "CXCR4", "GJA4", "GJA5", "SEMA3G", 
+  "MCAM", "WFDC2", "DLL1", "ARL4A", "ZFPM2", "HES1", "PRDM1", "FOXO1", 
+  "ESM1", "MECOM", "PECAM1", "ADM", "SOX18", "ERG", "PDGFB", "MMRN1", 
+  "CDH5", "DUSP23", "CFD", "SOX7", "KDR", "ROBO4", "PLVAP", "FLI1", 
+  "HHEX", "GATA2", "ELK3", "LEF1", "CPE", "EPCAM", "HES4", "PDGFA", 
+  "RGS5", "PGF", "HES5", "MYC", "RBPJ", "EP300", "SPINT2", "ZEB2", 
+  "EBF1", "NR2F2", "NRP2", "APLNR", "ZEB1", "ADAMTS18", "NTS", "NEFH", 
+  "LY6H", "RGS16", "HAND1", "KCNE3", "TFPI2", "MESP1", "MESP2", "PTPRC", 
+  "ALDH1A1", "CTGF", "FOXQ1", "PAX3", "AQP4", "ANKRD1", "TAGLN", "ACTA2"
+)
+
+#Keep only genes that exist in your Seurat object and get average expression per cluster 
+genes_present <- intersect(genes_of_interest, rownames(seurat_obj))
+avg_expr <- AverageExpression(seurat_obj, features = genes_present, group.by = "seurat_clusters", slot = "data")
+avg_matrix <- as.matrix(avg_expr$RNA)
+z_score <- t(scale(t(avg_matrix)))
+colnames(z_score) <- gsub("g", "", colnames(z_score)) #"g0" becomes "0", for style
+# Manually ordered to obtain a red diagonal
+my_cluster_order <- c("7", "10", "3", "9", "4", "6", "5", "1", "2", "8", "0", "11", "12", "13", "14", "15", "16", "17", "18","19", "20") 
+my_order <- intersect(my_cluster_order, colnames(z_score))
+z_score_ordered <- z_score[, my_order]
+var_sub <- apply(z_score_ordered, 1, var, na.rm = TRUE)
+z_score_ordered <- z_score_ordered[var_sub > 0 & !is.na(var_sub), ]
+
+# heatmap
+h <- pheatmap(z_score_ordered,
+         scale = "none",
+         cluster_rows = TRUE,       # Keeps your custom order
+         cluster_cols = FALSE, 
+         treeheight_row = 0,        # Deletes the row dendrogram
+         treeheight_col = 0,        # Deletes the column dendrogram (if any)
+         fontsize_row = 5,          # Prevents name overlap
+         height = 2,
+         angle_col = 0,             # Keeps cluster names horizontal
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         main = "Z-scored gene expression per cluster ")
+
+# Save pdf
+ggsave("heatmap.pdf", plot = h, width = 12, height = 8, dpi=600,  bg = "white")
+
+# Printing cluster's marker gene to ask LLMs which tissue corresponds
+genes_main <- apply(z_score_ordered, 2, function(x) {
+names(x[x > 2]) })  #Filter Z-score > 2
+genes_minor <- apply(z_score_ordered, 2, function(x) {
+names(x[x > 1 & x < 2]) }) #Filter z-score > 1 & z-score < 2
+
+# Print main and minor genes per cluster -> ASK LLMs to get cell type and cell state (if inferable)
+print(genes_main)
+print(genes_minor)
+
+```
+
+Cell Annotation Assignment on Whole integration
+```{r, include=FALSE, eval=FALSE}
+#seurat_int_all <- readRDS("seurat_integrated_r06.rds")
+
+# --------------- cluster identity --------------- #
+Idents(seurat_int_all) <- "seurat_clusters"
+new_cluster_ids <- c(
+  "0" = "Fibroblast-like Mural",
+  "1" = "Epicardial Progenitors",
+  "2" = "Mural Progenitors", #Undifferentiated perivascular cells.
+  "3" = "Epicardial-like",
+  "4" = "Contractile Mural", #Pericytes/SMCs
+  "5" = "Neural Crest / Early Progenitors", #mixed - CRABP1, PAX3 (Neural Crest) + POU5F1, MIXL1 (Pluripotent/Early).
+  "6" = "Neural Crest",
+  "7" = "Venous / Capillary Endothelial",
+  "8" = "Proliferating Neural Crest",
+  "9" = "Proliferating Early Mesoderm",
+  "10" = "Pan-Endothelial / Epithelial", #Highly Mixed. Contains pure Arterial ECs and Epithelial cells.
+  "11" = "Neuromesoderm/Myeloid"
+)
+seurat_int_all <- RenameIdents(seurat_int_all, new_cluster_ids)
+seurat_int_all$cell_type <- Idents(seurat_int_all)
+
+# plots with annotation
+DimPlot(seurat_int_all, reduction = "umap", label = FALSE) + ggtitle("Day 21 Clusters")
+```
+Some problems/mixed clusters:
+Cluster 10 is a major issue: It mixes your most important Arterial ECs with EPCAM+ Epithelial cells. At higher resolution, these must separate.
+Cluster 11 is a "collision": Neuromesoderm (MESP2) and Myeloid (PTPRC) cells should never be in the same cluster.
+Cluster 5 is unresolved: It currently groups early pluripotent cells (POU5F1) with neural crest cells (CRABP1).
+Next Step: Increase resolution to 0.8. If Cluster 10 and 11 still don't split, extract just those cells and perform sub-clustering on them specifically.
 
 
+# Sub-clustering 10,11
+```{r}
+# 1. Reset and Subset
+# Use the original numeric idents if you haven't renamed, 
+# OR use the names if you have. This version is safe:
+Idents(seurat_int_all) <- "seurat_clusters" 
+mixed_sub <- subset(seurat_int_all, idents = c("10", "11"))
 
+# 2. Switch to RNA Assay to find ALL your genes
+# This fixes the "39 features not found" warning
+DefaultAssay(mixed_sub) <- "RNA"
 
+# 3. Define and Clean Features
+genes_of_interest <- c("POU5F1", "NANOG", "THRB", "HAND2", "BAMBI", "LUM", "DCN", "DLK1", "ETV2", "MAML1", "PITX1", "SPRY1", "TRPS1", "SNAI2", "PDGFRB", "CSPG4", "ANGPT2", "MATN4", "MIXL1", "DLL3", "SULF1", "COL4A1", "LOX", "KRT19", "WNT5A", "NID2", "POSTN", "IGFBP3", "COL5A1", "HES2", "HRH1", "SMAD3", "RGCC", "PLAUR", "IGFBP5", "NR3C1", "GATA6", "SGK1", "DKK1", "CRABP1", "HEY1", "DLL4", "VWF", "CLDN5", "CXCR4", "GJA4", "GJA5", "SEMA3G", "MCAM", "WFDC2", "DLL1", "ARL4A", "ZFPM2", "HES1", "PRDM1", "FOXO1", "ESM1", "MECOM", "PECAM1", "ADM", "SOX18", "ERG", "PDGFB", "MMRN1", "CDH5", "DUSP23", "CFD", "SOX7", "KDR", "ROBO4", "PLVAP", "FLI1", "HHEX", "GATA2", "ELK3", "LEF1", "CPE", "EPCAM", "HES4", "PDGFA", "RGS5", "PGF", "HES5", "MYC", "RBPJ", "EP300", "SPINT2", "ZEB2", "EBF1", "NR2F2", "NRP2", "APLNR", "ZEB1", "ADAMTS18", "NTS", "NEFH", "LY6H", "RGS16", "HAND1", "KCNE3", "TFPI2", "MESP1", "MESP2", "PTPRC", "ALDH1A1", "CTGF", "FOXQ1", "PAX3", "AQP4", "ANKRD1", "TAGLN", "ACTA2")
+cycle_genes <- c("MKI67", "TOP2A", "CDK1", "CCNB1", "PCNA", "RRM2")
+targeted_features <- setdiff(genes_of_interest, cycle_genes)
+targeted_features <- intersect(targeted_features, rownames(mixed_sub))
 
+# 4. Re-Process with Scaling (The crucial fix)
+mixed_sub <- NormalizeData(mixed_sub)
+mixed_sub <- ScaleData(mixed_sub, features = targeted_features)
+mixed_sub <- RunPCA(mixed_sub, features = targeted_features, verbose = FALSE)
 
+# 5. Find Clusters (Resolution 1.3 is the "Sweet Spot" for 6 clusters)
+mixed_sub <- FindNeighbors(mixed_sub, dims = 1:20)
+mixed_sub <- FindClusters(mixed_sub, resolution = 1.2)
+mixed_sub <- RunUMAP(mixed_sub, dims = 1:20)
 
+# 6. Apply the 6-way naming
+# Note: If it finds a 7th cluster (6), I added a placeholder name
+new_sub_names <- c(
+  "0" = "Proliferating Early Mesoderm", 
+  "1" = "Arterial EC", #no EPCAM pure arterial
+  "2" = "Contractile Mural",  #POU5F1, NANOG
+  "3" = "Mural Progenitors", 
+  "4" = "Venous / Capillary Endothelial", 
+  "5" = "Proliferating Myeloid"
+)
 
+mixed_sub <- RenameIdents(mixed_sub, new_sub_names)
+mixed_sub$refined_type <- Idents(mixed_sub)
 
+# 7. Visualize Result
+DimPlot(mixed_sub, reduction = "umap", label = FALSE, repel = TRUE) + 
+  ggtitle("Successfully Resolved: 10 & 11 Sub-types")
+```
+
+Sub-clustering 5
+```{r}
+# Subset Cluster 5
+cluster5_sub <- subset(seurat_int_all, idents = "5")
+DefaultAssay(cluster5_sub) <- "RNA"
+
+# Re-scale and PCA using your existing targeted_features
+cluster5_sub <- NormalizeData(cluster5_sub)
+cluster5_sub <- ScaleData(cluster5_sub, features = targeted_features)
+cluster5_sub <- RunPCA(cluster5_sub, features = targeted_features, verbose = FALSE)
+
+# Find Sub-clusters (Try lower resolution first)
+cluster5_sub <- FindNeighbors(cluster5_sub, dims = 1:20)
+cluster5_sub <- FindClusters(cluster5_sub, resolution = 0.7)
+cluster5_sub <- RunUMAP(cluster5_sub, dims = 1:20)
+
+new_sub_5 <- c(
+  "0" = "Early Pluripotent Progenitors", 
+  "1" = "Venous / Capillary Endothelial", 
+  "2" = "Endothelial Progenitors",  
+  "3" = "Arterial EC (Proliferating)", #change to Arterial EC to treat as one single group
+  "4" = "Arterial EC"
+)
+
+cluster5_sub <- RenameIdents(cluster5_sub, new_sub_5)
+cluster5_sub$refined_type <- Idents(cluster5_sub)
+
+# 7. Visualize Result
+DimPlot(cluster5_sub, reduction = "umap", label = FALSE, repel = TRUE) + 
+  ggtitle("Successfully Resolved: 5 Sub-types")
+
+DimPlot(cluster5_sub, reduction = "umap", label = FALSE, repel = TRUE) 
+```
+
+Merge all sub-cluster to get one final_type Annotation 
+```{r}
+# 1. Initialize final types with your current main annotations
+seurat_int_all$final_type <- as.character(seurat_int_all$cell_type)
+
+# 2. Inject refined names from sub-clusters 10 & 11
+seurat_int_all$final_type[Cells(mixed_sub)] <- as.character(Idents(mixed_sub))
+
+# 3. Inject refined names from sub-cluster 5
+seurat_int_all$final_type[Cells(cluster5_sub)] <- as.character(Idents(cluster5_sub))
+
+# 4. Set the new names as the active identity
+Idents(seurat_int_all) <- "final_type"
+
+# 5. Visualize
+DimPlot(seurat_int_all, reduction = "umap", label = FALSE, repel = TRUE) + 
+  ggtitle("Main UMAP: All Sub-clusters Merged")
+```
+# Select before plotting the right labeling: Idents(seurat_int_all) <- "final_type"
+
+# Analize whole integration
+```{r}
+DimPlot(seurat_int_all, reduction = "umap", group.by = "condition")
+DimPlot(seurat_int_all, reduction = "umap", split.by = "condition")
+
+# Use final_type to get biological names instead of numbers
+counts <- table(seurat_int_all$final_type, seurat_int_all$condition)
+
+# Convert to proportions
+proportions <- as.data.frame(prop.table(counts, margin = 1))
+colnames(proportions) <- c("CellType", "Condition", "Proportion")
+
+# Plot - note that X is now 'CellType' which contains the strings
+ggplot(proportions, aes(x = CellType, y = Proportion, fill = Condition)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme_minimal() +
+  # Rotate labels so they don't overlap
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(y = "Fraction of Cells", title = "Proportion of WT vs KO per Identity") +
+  scale_y_continuous(labels = scales::percent)
+```
+#BOOM: 
+Pluripotent are more in KO since they struggle to differentiate and remain undifferentiate.
+Arterial EC are way more in WT since they differentiate better than KO.
 
 
