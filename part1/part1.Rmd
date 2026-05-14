@@ -10,7 +10,6 @@ date: "`r Sys.Date()`"
 knitr::opts_knit$set(root.dir = '/Users/marco/Desktop/SingleCells/part1')
 ```
 
-
 ```{r}
 suppressPackageStartupMessages({
   library(Seurat)
@@ -534,8 +533,8 @@ print(genes_minor)
 ```
 
 Cell Annotation Assignment on Whole integration
-```{r, include=FALSE, eval=FALSE}
-#seurat_int_all <- readRDS("seurat_integrated_r06.rds")
+```{r, include=TRUE, eval=TRUE}
+seurat_int_all <- readRDS("seurat_integrated_r06.rds")
 
 # --------------- cluster identity --------------- #
 Idents(seurat_int_all) <- "seurat_clusters"
@@ -545,7 +544,7 @@ new_cluster_ids <- c(
   "2" = "Mural Progenitors", #Undifferentiated perivascular cells.
   "3" = "Epicardial-like",
   "4" = "Contractile Mural", #Pericytes/SMCs
-  "5" = "Neural Crest / Early Progenitors", #mixed - CRABP1, PAX3 (Neural Crest) + POU5F1, MIXL1 (Pluripotent/Early).
+  "5" = "Neural Crest / Pluripotent", #mixed - CRABP1, PAX3 (Neural Crest) + POU5F1, MIXL1 (Pluripotent/Early).
   "6" = "Neural Crest",
   "7" = "Venous / Capillary Endothelial",
   "8" = "Proliferating Neural Crest",
@@ -559,6 +558,7 @@ seurat_int_all$cell_type <- Idents(seurat_int_all)
 # plots with annotation
 DimPlot(seurat_int_all, reduction = "umap", label = FALSE) + ggtitle("Day 21 Clusters")
 ```
+
 Some problems/mixed clusters:
 Cluster 10 is a major issue: It mixes your most important Arterial ECs with EPCAM+ Epithelial cells. At higher resolution, these must separate.
 Cluster 11 is a "collision": Neuromesoderm (MESP2) and Myeloid (PTPRC) cells should never be in the same cluster.
@@ -599,8 +599,8 @@ mixed_sub <- RunUMAP(mixed_sub, dims = 1:20)
 new_sub_names <- c(
   "0" = "Proliferating Early Mesoderm", 
   "1" = "Arterial EC", #no EPCAM pure arterial
-  "2" = "Contractile Mural",  #POU5F1, NANOG
-  "3" = "Mural Progenitors", 
+  "2" = "Contractile Mural",  
+  "3" = "Mural Progenitors",  
   "4" = "Venous / Capillary Endothelial", 
   "5" = "Proliferating Myeloid"
 )
@@ -629,67 +629,81 @@ cluster5_sub <- FindNeighbors(cluster5_sub, dims = 1:20)
 cluster5_sub <- FindClusters(cluster5_sub, resolution = 0.7)
 cluster5_sub <- RunUMAP(cluster5_sub, dims = 1:20)
 
+
 new_sub_5 <- c(
-  "0" = "Early Pluripotent Progenitors", 
+  "0" = "Pluripotent Progenitors", 
   "1" = "Venous / Capillary Endothelial", 
   "2" = "Endothelial Progenitors",  
-  "3" = "Arterial EC (Proliferating)", #change to Arterial EC to treat as one single group
+  "3" = "Arterial EC", # This should be "Arterial EC (Proliferating)" but I prefer to not separate them
   "4" = "Arterial EC"
 )
 
 cluster5_sub <- RenameIdents(cluster5_sub, new_sub_5)
 cluster5_sub$refined_type <- Idents(cluster5_sub)
 
-# 7. Visualize Result
+# Visualize Result
 DimPlot(cluster5_sub, reduction = "umap", label = FALSE, repel = TRUE) + 
   ggtitle("Successfully Resolved: 5 Sub-types")
-
-DimPlot(cluster5_sub, reduction = "umap", label = FALSE, repel = TRUE) 
 ```
 
 Merge all sub-cluster to get one final_type Annotation 
 ```{r}
-# 1. Initialize final types with your current main annotations
+#---------- MERGE SUB-CLUSTERS with MAIN CLUSTERS ---------- #
+# Initialize final types with your current main annotations
 seurat_int_all$final_type <- as.character(seurat_int_all$cell_type)
 
-# 2. Inject refined names from sub-clusters 10 & 11
+# Inject refined names from sub-clusters 10 & 11
 seurat_int_all$final_type[Cells(mixed_sub)] <- as.character(Idents(mixed_sub))
 
-# 3. Inject refined names from sub-cluster 5
+# Inject refined names from sub-cluster 5
 seurat_int_all$final_type[Cells(cluster5_sub)] <- as.character(Idents(cluster5_sub))
 
-# 4. Set the new names as the active identity
+# Set the new names as the active identity
 Idents(seurat_int_all) <- "final_type"
+#------------------------------------------------------------#
 
-# 5. Visualize
-DimPlot(seurat_int_all, reduction = "umap", label = FALSE, repel = TRUE) + 
-  ggtitle("Main UMAP: All Sub-clusters Merged")
+#Tidying the object - style
+# Write out all 13 names in the exact sequence you want them to appear
+my_custom_order <- c(
+  "Arterial EC",
+  "Venous / Capillary Endothelial",
+  "Contractile Mural",
+  "Fibroblast-like Mural",
+  "Epicardial-like",
+  "Neural Crest",
+  "Pluripotent Progenitors",
+  "Endothelial Progenitors",
+  "Mural Progenitors",
+  "Epicardial Progenitors",
+  "Proliferating Neural Crest",
+  "Proliferating Early Mesoderm",
+  "Proliferating Myeloid"
+)
+
+# Overwrite final_type as an ordered factor
+seurat_int_all$final_type <- factor(seurat_int_all$final_type, levels = my_custom_order)
+
+# Clean up old metadata columns
+seurat_int_all$strata_cluster <- NULL
+seurat_int_all$cell_type <- NULL
+
+# Create numbered clusters (1 to 13) matching the custom order
+seurat_int_all$seurat_clusters <- as.character(as.numeric(seurat_int_all$final_type))
+
+# Convert the numbers into an ordered factor so they sort correctly (1, 2, 3...)
+seurat_int_all$seurat_clusters <- factor(seurat_int_all$seurat_clusters, levels = as.character(1:13))
+
+# Plot by Number
+Idents(seurat_int_all) <- "seurat_clusters"
+DimPlot(seurat_int_all, reduction = "umap", label = TRUE, repel = TRUE) + 
+  ggtitle("Main UMAP: Perfectly Ordered Numbers")
+
+# Plot by Name
+Idents(seurat_int_all) <- "final_type"
+DimPlot(seurat_int_all, reduction = "umap", label = FALSE) + 
+  ggtitle("Main UMAP: Ordered by Name")
+
+# Save Final Object
+#saveRDS(seurat_int_all, file="seurat_int_all.rds")
 ```
-# Select before plotting the right labeling: Idents(seurat_int_all) <- "final_type"
-
-# Analize whole integration
-```{r}
-DimPlot(seurat_int_all, reduction = "umap", group.by = "condition")
-DimPlot(seurat_int_all, reduction = "umap", split.by = "condition")
-
-# Use final_type to get biological names instead of numbers
-counts <- table(seurat_int_all$final_type, seurat_int_all$condition)
-
-# Convert to proportions
-proportions <- as.data.frame(prop.table(counts, margin = 1))
-colnames(proportions) <- c("CellType", "Condition", "Proportion")
-
-# Plot - note that X is now 'CellType' which contains the strings
-ggplot(proportions, aes(x = CellType, y = Proportion, fill = Condition)) +
-  geom_bar(stat = "identity", position = "stack") +
-  theme_minimal() +
-  # Rotate labels so they don't overlap
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
-  labs(y = "Fraction of Cells", title = "Proportion of WT vs KO per Identity") +
-  scale_y_continuous(labels = scales::percent)
-```
-#BOOM: 
-Pluripotent are more in KO since they struggle to differentiate and remain undifferentiate.
-Arterial EC are way more in WT since they differentiate better than KO.
-
 
