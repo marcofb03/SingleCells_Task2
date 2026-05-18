@@ -1,0 +1,187 @@
+---
+title: "Single Cell Task 2 Part 3"
+author: "Ruqia Ali Hassan"
+date: "2026-05-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Part 3 - Differential expression analysis
+```{r Library}
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(Seurat)
+  library(dplyr)
+  library(ggplot2)
+  library(ggrepel)
+  
+})
+
+options(Seurat.object.assay.version = "v3")
+```
+
+```{r Loading data}
+seurat <- readRDS("seurat_int_all.rds")
+
+seurat[["RNA"]] <- as(object = seurat[["RNA"]], Class = "Assay")
+
+#metadata
+head(seurat@meta.data)
+
+
+
+#Loading results from differential anaylsis (part2)
+da_results <- readRDS("da_results.rds")
+
+```
+
+
+## General transcriptome similarity
+
+```{r}
+#printing summary of differential analysis to decide which final_types to use for differrential expression analysis (DE) 
+da_results %>%
+  filter(final_type != "Mixed") %>%
+  group_by(final_type) %>%
+  summarise(
+    n_nhoods       = n(),
+    mean_logFC     = mean(logFC),
+    median_logFC   = median(logFC),
+    prop_positive  = mean(logFC > 0),
+    min_spatialFDR = min(SpatialFDR)
+  ) %>%
+  arrange(min_spatialFDR)
+
+```
+As mentioned earlier, we did not obtain any statistically significant results, as all min_spatialFDR values were around 0.33 (values < 0.05 would be considered significant).Therefore, we focused on the median_logFC, which provides an estimate of effect size (negative values indicate depletion in KO, while positive values indicate enrichment), and the prop_positive, which reflects the consistency of the observed effect across neighborhoods (1.0 = all neighborhoods show positive enrichment, 0.5 = mixed signal, 0.0 = all neighborhoods show negative values, indicating consistent depletion).
+
+Based on these criteria, we identified Venous/Capillary Endothelial (median −2.73, prop_positive = 0.02), Contractile Mural (median −2.35, prop_positive = 0.24), and Proliferating Early Mesoderm (median −1.57, prop_positive = 0.00) as the most depleted populations in KO.
+
+Neural Crest (median +5.63, prop_positive = 1.00), Pluripotent Progenitors (median +7.37, prop_positive = 1.00), and Proliferating Neural Crest (median +2.24, prop_positive = 0.77) were selected as the most enriched populations in KO.
+
+```{r}
+cell_types <- c(
+  "Proliferating Early Mesoderm",
+  "Contractile Mural",
+  "Venous / Capillary Endothelial",
+  "Neural Crest", 
+  "Pluripotent Progenitors", 
+  "Proliferating Neural Crest"
+)
+```
+
+
+Prior to differential expression analysis, we assessed the general transcriptomic similarity between KO and WT samples within each cell type of interest using hierarchical clustering of Pearson correlation coefficients calculated from average gene expression across highly variable genes. This serves as a preliminary indicator of whether condition-driven transcriptomic differences exist within a given cell population.
+
+```{r}
+
+pdf("transcriptome_similarity.pdf", width = 8, height = 6)
+
+for (ct in cell_types) {
+  seurat_sub <- subset(seurat, subset = final_type == ct) %>%
+    FindVariableFeatures()
+  
+  samples <- sort(unique(seurat_sub$sample))
+  
+  avg_expr <- sapply(samples, function(s) {
+    cells_use <- which(seurat_sub$sample == s)
+    rowMeans(seurat_sub@assays$RNA@data[, cells_use, drop = FALSE])
+  })
+  
+  avg_expr <- avg_expr[VariableFeatures(seurat_sub), , drop = FALSE]
+  corr_mat <- cor(avg_expr)
+  
+  plot(
+    hclust(as.dist(1 - corr_mat)),
+    main = paste("Transcriptome similarity:", ct)
+  )
+}
+
+dev.off()
+```
+
+For Proliferating Early Mesoderm cells, the four samples do not show a clear separation by condition, suggesting that transcriptomic differences are relatively modest and may be dominated by sample-to-sample variability. This indicates that MECOM loss does not produce a strong or consistent transcriptional shift in this population at day 21.
+
+For Venous/Capillary Endothelial cells, KO and WT samples do not cluster cleanly by condition. Instead, samples from different conditions are intermingled, suggesting that inter-sample variability exceeds the effect of MECOM loss in this population. Differential expression results for this cell type should therefore be interpreted cautiously.
+
+For Pluripotent Progenitors, the samples do not separate clearly by condition, with KO and WT samples showing mixed clustering. This suggests a weaker or more heterogeneous transcriptional response to MECOM knockout in this population.
+
+For Proliferating Neural Crest cells, the pattern is similar to Pluripotent Progenitors, with no strong condition-specific separation and evidence of mixed clustering across KO and WT samples. Overall, this suggests that MECOM-dependent transcriptomic effects are less pronounced in this population.
+
+For Contractile Mural cells, the KO samples (B1_17_1_day21, D2_22_3_day21) cluster together and separate from the WT samples (wt_2_day21, wt_4_day21), indicating that transcriptomic variation is primarily driven by condition rather than individual sample differences. This supports the conclusion that MECOM knockout induces a consistent transcriptional program in this cell type.
+
+For Neural Crest cells, the KO samples again group together and are separated from the WT samples, showing a strong condition-associated transcriptomic signature. This is consistent with robust MECOM-dependent regulation in Neural Crest cells.
+
+
+Overall, the clearest condition-driven separation is observed in Contractile Mural and Neural Crest cells, whereas Proliferating Early Mesoderm, Venous/Capillary Endothelial, Pluripotent Progenitors, and Proliferating Neural Crest show weaker or less consistent separation between KO and WT.
+
+```{r}
+de_results_list <- list()
+pdf("DESeq2_volcano_plots.pdf", width = 8, height = 6)
+
+for (ct in cell_types) {
+  cat("\nRunning DESeq2 for:", ct, "\n")
+  
+  # subset to cell type
+  seurat_sub <- subset(seurat, subset = final_type == ct)
+  
+  det_rate <- rowMeans(seurat_sub@assays$RNA@data)
+  
+  # build metadata
+  meta <- seurat_sub@meta.data %>%
+    mutate(condition = factor(condition, levels = c("WT", "KO")))
+  
+  # build DESeq2 object
+  dds <- DESeqDataSetFromMatrix(seurat_sub@assays$RNA@counts[det_rate> 0.05,],
+                                colData=meta,
+                                design    = ~ condition
+  )
+  
+  # DESeq2's own size factor estimation (instead of scran)
+  dds <- estimateSizeFactors(dds)
+  
+  # run DESeq2 with settings recommended for scRNA-seq
+  dds <- DESeq(dds,
+               test                    = "LRT",
+               reduced                 = ~1,
+               useT                    = TRUE,
+               minmu                   = 1e-6,
+               minReplicatesForReplace = Inf)
+  
+  # extract results
+  res <- results(dds) %>% as.data.frame() %>%
+    tibble::rownames_to_column("gene") %>%
+    mutate(DE = abs(log2FoldChange)>log2(1.1) & padj < 0.01) %>%
+    mutate(DEG = ifelse(abs(log2FoldChange)>log2(1.1) & padj < 0.01, gene, NA))
+  
+  de_results_list[[ct]] <- res
+  
+  # volcano plot
+  p <- ggplot(res, aes(x = log2FoldChange, y = -log10(padj), col = DE, label = DEG)) +
+    geom_point() +
+    geom_text_repel(max.overlaps = 20)+ geom_vline(xintercept=c(-log2(1.1), log2(1.1), 0), col="#303030", linetype="dotted") +
+    geom_hline(yintercept=-log10(0.01), col="#303030", linetype="dotted") +
+    scale_color_manual(values=c("#909090", "red")) + theme_minimal() +
+    ggtitle(paste("DESeq2: KO vs WT —", ct)) +
+    xlab("log2 Fold Change (KO vs WT)") +
+    ylab("-log10(padj)")
+  
+  print(p)
+  
+  # print top hits
+  cat("Top DEGs for", ct, ":\n")
+  print(head(res %>% filter(DE == TRUE) %>% arrange(padj), 10))
+}
+
+dev.off()
+
+# save results
+saveRDS(de_results_list, "de_results_list.rds")
+```
+The volcano plots suggest that Contractile Mural cells exhibit a broad set of differentially expressed genes with several highly significant hits, indicating a clear transcriptional response to MECOM knockout. Neural Crest and Venous/Capillary Endothelial cells also show substantial differential expression, with a noticeable bias toward positive log2 fold-changes, suggesting preferential upregulation of genes in KO samples. However, the apparent strength of these signals should be interpreted cautiously because the volcano panels use different axis ranges and are therefore not directly comparable based on visual spread alone. Proliferating Neural Crest and Proliferating Early Mesoderm display broader fold-change distributions but generally lower statistical significance, suggesting a weaker or more heterogeneous transcriptional response. Pluripotent Progenitors show a more limited overall differential expression pattern, aside from a small subset of genes with more extreme fold-changes. Overall, the volcano plots indicate cell-type-specific transcriptional responses to MECOM knockout, but direct ranking of the “strongest” response across panels should be avoided unless identical thresholds and axis scales are used throughout.
+
+ 
+Taken together, the transcriptome similarity analysis and differential expression results indicate that MECOM knockout induces cell-type-specific transcriptional responses in day 21 hBVOs. Contractile Mural cells showed the clearest and most consistent condition-associated effects, with KO and WT samples clustering separately at the transcriptome level and displaying broad differential-expression signatures with multiple highly significant genes. This suggests a robust and reproducible MECOM-dependent transcriptional program in this population. Neural Crest cells also showed evidence of condition-associated transcriptional changes, although these effects appeared less pronounced overall. In contrast, Venous/Capillary Endothelial, Proliferating Neural Crest, Proliferating Early Mesoderm, and Pluripotent Progenitors displayed weaker or less consistent sample-level separation, indicating that inter-sample variability may contribute substantially to the observed expression patterns. Although differential expression was still detected in some of these populations, these signals likely reflect more subtle or heterogeneous responses to MECOM loss and should therefore be interpreted with greater caution. Overall, the results support a role for MECOM in regulating transcriptional identity particularly within mural-associated lineages.
+
