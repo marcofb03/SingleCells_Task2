@@ -1,0 +1,227 @@
+---
+title: "part2"
+output: html_document
+date: "2026-05-14"
+---
+
+```{r setup, include=FALSE}
+# This sets the directory for ALL subsequent chunks
+# knitr::opts_knit$set(root.dir = '/Users/marco/Desktop/SingleCells/part2')
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(Matrix)
+  library(patchwork)
+  library(dplyr)
+  library(ggplot2)
+  library(pheatmap)
+  library(SingleCellExperiment)
+  library(miloR)
+  library(scater)
+  library(scran)
+})
+
+options(Seurat.object.assay.version = "v3")
+```
+
+# Loading Seurat Obj (all 4 samples integrated together 2KO (MECOM-) and 2WT)
+```{r}
+seurat <- readRDS("seurat_int_all.rds")
+
+#metadata
+head(seurat@meta.data)
+
+# Plot by Number
+Idents(seurat) <- "seurat_clusters"
+
+DimPlot(seurat, reduction = "umap", label = TRUE, repel = TRUE) + 
+  ggtitle("Ordered by Numbers")
+
+# Plot by Name
+Idents(seurat) <- "final_type" 
+
+DimPlot(seurat, reduction = "umap", label = FALSE) + 
+  ggtitle("Ordered by Name")
+```
+
+# Analize composition WT vs KO
+```{r}
+DimPlot(seurat, reduction = "umap", group.by = "condition")
+
+DimPlot(seurat, reduction = "umap", split.by = "condition")
+
+# Use final_type to get biological names instead of numbers
+counts <- table(seurat$final_type, seurat$condition)
+
+# Convert to proportions
+proportions <- as.data.frame(prop.table(counts, margin = 1))
+colnames(proportions) <- c("CellType", "Condition", "Proportion")
+
+# Plot - note that X is now 'CellType' which contains the strings
+ggplot(proportions, aes(x = CellType, y = Proportion, fill = Condition)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme_minimal() +
+  # Rotate labels so they don't overlap
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(y = "Fraction of Cells", title = "Proportion of WT vs KO per Identity") +
+  scale_y_continuous(labels = scales::percent)
+```
+
+Observation: 
+Pluripotent Cells are more in KO since they struggle to differentiate and remain indeed undifferentiated.
+Arterial EC are way more in WT since they differentiate more than KO (so less pluripotent).
+
+# Next analysis
+
+## Comparison of cell type compositions between conditions 
+
+Based on the following tutorials: https://bioconductor.org/packages/release/bioc/vignettes/miloR/inst/doc/milo_demo.html and https://rawcdn.githack.com/MarioniLab/miloR/7c7f906b94a73e62e36e095ddb3e3567b414144e/vignettes/milo_gastrulation.html#5_Finding_markers_of_DA_populations
+
+Here we use Milo, a method that does not rely on predefined cluster or cell type/state labels. Milo is a tool for analysis of complex single cell datasets generated from replicated multi-condition experiments, which detects changes in composition between conditions. While differential abundance (DA) is commonly quantified in discrete cell clusters, Milo uses partially overlapping neighbourhoods of cells on a KNN graph. Starting from a graph that faithfully recapitulates the biology of the cell population, Milo analysis consists of 3 steps:
+1. Sampling of representative neighbourhoods
+2. Testing for differential abundance of conditions in all neighbourhoods
+3. Accounting for multiple hypothesis testing using a weighted FDR procedure that accounts for the overlap of neighbourhoods
+
+```{r}
+# turning our Seurat object into a SingleCellExperiment object
+seurat[["RNA"]] <- as(object = seurat[["RNA"]], Class = "Assay")
+# we use non-integrated data for Milo, hence the argument assay = "RNA"
+sce <- as.SingleCellExperiment(seurat, assay = "RNA")
+```
+
+```{r}
+# sample information is stored in colData(sce)$condition
+colData(sce)
+```
+
+```{r}
+# preprocessing: we normalize and calculate principal components using the scater library
+logcounts(sce) <- log(counts(sce) + 1)
+sce <- runPCA(sce, ncomponents=50)
+sce <- runUMAP(sce)
+plotUMAP(sce)
+```
+
+```{r}
+# visualizing PCA output
+percent.var <- attr(reducedDim(sce, "PCA"), "percentVar")
+plot(percent.var, xlab="PC", ylab="Variance explained (%)")
+```
+
+```{r}
+# creating a Milo object from our SingleCellExperiment object
+milo <- Milo(sce)
+reducedDim(milo, "UMAP") <- reducedDim(sce, "UMAP")
+milo
+```
+
+We need to add the KNN graph to the Milo object. This is stored in the graph slot, in igraph format. The miloR package includes functionality to build and store the graph from the PCA dimensions stored in the reducedDim slot.
+We define the following parameters:
+d: how many PCs to use
+k: how many neighbors to consider. k controls neighborhood granularity: smaller k gives smaller, more local neighborhoods (more sensitive, but noisier), while larger k gives smoother, broader neighborhoods (more stable, but may blur nearby states).
+
+```{r}
+milo <- buildGraph(milo, k = 40, d = 10)
+```
+
+We define the neighbourhood of a cell, the index, as the group of cells connected by an edge in the KNN graph to the index cell. 
+We define the following parameters:
+prop: the proportion of cells to randomly sample to start with (usually 0.1 - 0.2 is sufficient)
+k: the k to use for KNN refinement (using the same k used for KNN graph building is recommended)
+d: the number of reduced dimensions to use for KNN refinement (using the same d used for KNN graph building is recommended)
+refined: indicates whether you want to use the sampling refinement algorithm, or just pick cells at random. The default and recommended way to go is to use refinement.
+
+```{r}
+milo <- makeNhoods(milo, prop = 0.1, k = 40, d=10, refined = TRUE)
+```
+
+Once we have defined neighbourhoods, it’s good to take a look at how big the neighbourhoods are (i.e. how many cells form each neighbourhood). This affects the power of DA testing. Empirically, it was found that it’s best to have a distribution peaking between 50 and 100. Otherwise you might consider rerunning makeNhoods increasing k and/or prop.
+
+```{r}
+plotNhoodSizeHist(milo)
+```
+
+Now we have to count how many cells from each sample are in each neighbourhood. We need to use the cell metadata and specify which column contains the sample information. Each row of the resulting cell count matrix represents a single neighbourhood, while the values indicate the number of cells. This count matrix will be used for DA testing.
+
+```{r}
+milo <- countCells(milo, meta.data = data.frame(colData(milo)), samples="sample")
+head(nhoodCounts(milo))
+```
+
+Differential abundance testing.
+We implement hypothesis testing in a generalized linear model (GLM) framework, specifically using the Negative Binomial GLM implementation in edgeR. The design matrix should match samples to a condition of interest. In this case the Condition is the covariate we are going to test for.
+
+```{r}
+dm <- data.frame(colData(milo))[,c("sample", "condition")]
+dm <- distinct(dm)
+rownames(dm) <- dm$sample
+
+# reorder rownames to match columns of nhoodCounts(milo)
+dm <- dm[colnames(nhoodCounts(milo)), , drop=FALSE]
+
+dm$condition <- factor(dm$condition, levels = c("WT", "KO"))
+
+dm
+```
+
+Milo uses an adaptation of the Spatial FDR correction, which accounts for the overlap between neighbourhoods. Specifically, each hypothesis test P-value is weighted by the reciprocal of the kth nearest neighbour distance. To use this statistic we first need to store the distances between nearest neighbors in the Milo object.
+
+```{r}
+milo <- calcNhoodDistance(milo, d=10)
+```
+
+Now we can calculate a Fold-change and corrected P-value for each neighbourhood, which indicates whether there is significant differential abundance between conditions.
+
+```{r}
+rownames(dm) <- dm$sample
+da_results <- testNhoods(milo, design = ~ condition, design.df = dm)
+```
+
+```{r}
+da_results %>%
+  arrange(- SpatialFDR) %>%
+  head() 
+```
+
+Visualization.
+To visualize DA results, we build an abstracted graph of neighbourhoods that we can superimpose on the single-cell embedding.
+
+```{r}
+milo <- buildNhoodGraph(milo)
+
+plotUMAP(milo) + plotNhoodGraphDA(milo, da_results, alpha=1) +
+  plot_layout(guides="collect")
+```
+
+Using this method, we get no significant results. This is completely normal considering the fact that we only have two replicates for each condition. The WT samples were used as a reference. Hence, positive logFC values (blue) indicate neighborhoods enriched in KO and negative logFC values (red) indicate neighborhoods enriched in WT.
+
+Here we visualize whether DA is particularly evident in certain cell types. To do this, we assign a cell type label to each neighbourhood by finding the most abundant cell type within cells in each neighbourhood. We also saves the fraction of cells harbouring the label.
+
+```{r}
+da_results <- annotateNhoods(milo, da_results, coldata_col = "final_type")
+head(da_results)
+```
+
+```{r}
+# visualizing the distribution of most abundant cell type fractions
+ggplot(da_results, aes(final_type_fraction)) + geom_histogram(bins=50)
+```
+
+It seems like there are a lot of neighborhoods where cell types are very mixed. Biology or annotation issues?
+
+```{r}
+# we can define a threshold for final_type_fraction to exclude neighbourhoods that are a mix of cell types
+da_results$final_type <- ifelse(da_results$final_type_fraction < 0.6, "Mixed", da_results$final_type)
+```
+
+```{r}
+# visualizing the distribution of DA Fold Changes in different cell types
+plotDAbeeswarm(da_results, group.by = "final_type", alpha = 1)
+```
+
+Again, no significant results. Each dot is a neighborhood, not an entire cell type, so within one annotated cell type, different local regions can behave differently between WT and KO. That is the reason why we might see both positive and negative logFC inside the same broad annotation. This could mean that WT enriches one sub-state, whereas KO enriches another rather than the entire lineage uniformly increasing/decreasing. This distinguishes Milo from cluster-based DA, which investigates if the total number of cells in cluster X changes. Milo investigates change in local regions, so it naturally produces bidirectional effects inside broad labels and fine-grained state-specific DA.
+
+Additional steps?
+Overlay DA neighborhoods onto UMAP with cell type labels, plot marker gradients across DA regions
