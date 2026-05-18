@@ -86,9 +86,8 @@ Here we use Milo, a method that does not rely on predefined cluster or cell type
 
 ```{r}
 # turning our Seurat object into a SingleCellExperiment object
-seurat[["RNA"]] <- as(object = seurat[["RNA"]], Class = "Assay")
-# we use non-integrated data for Milo, hence the argument assay = "RNA"
-sce <- as.SingleCellExperiment(seurat, assay = "RNA")
+seurat[["integrated"]] <- as(object = seurat[["integrated"]], Class = "Assay")
+sce <- as.SingleCellExperiment(seurat, assay = "integrated")
 ```
 
 ```{r}
@@ -97,23 +96,10 @@ colData(sce)
 ```
 
 ```{r}
-# preprocessing: we normalize and calculate principal components using the scater library
-logcounts(sce) <- log(counts(sce) + 1)
-sce <- runPCA(sce, ncomponents=50)
-sce <- runUMAP(sce)
-plotUMAP(sce)
-```
-
-```{r}
-# visualizing PCA output
-percent.var <- attr(reducedDim(sce, "PCA"), "percentVar")
-plot(percent.var, xlab="PC", ylab="Variance explained (%)")
-```
-
-```{r}
 # creating a Milo object from our SingleCellExperiment object
 milo <- Milo(sce)
 reducedDim(milo, "UMAP") <- reducedDim(sce, "UMAP")
+reducedDim(milo, "PCA") <- reducedDim(sce, "PCA")
 milo
 ```
 
@@ -123,7 +109,7 @@ d: how many PCs to use
 k: how many neighbors to consider. k controls neighborhood granularity: smaller k gives smaller, more local neighborhoods (more sensitive, but noisier), while larger k gives smoother, broader neighborhoods (more stable, but may blur nearby states).
 
 ```{r}
-milo <- buildGraph(milo, k = 40, d = 10)
+milo <- buildGraph(milo, k = 40, d = 15)
 ```
 
 We define the neighbourhood of a cell, the index, as the group of cells connected by an edge in the KNN graph to the index cell. 
@@ -134,7 +120,7 @@ d: the number of reduced dimensions to use for KNN refinement (using the same d 
 refined: indicates whether you want to use the sampling refinement algorithm, or just pick cells at random. The default and recommended way to go is to use refinement.
 
 ```{r}
-milo <- makeNhoods(milo, prop = 0.1, k = 40, d=10, refined = TRUE)
+milo <- makeNhoods(milo, prop = 0.1, k = 40, d=15, refined = TRUE)
 ```
 
 Once we have defined neighbourhoods, it’s good to take a look at how big the neighbourhoods are (i.e. how many cells form each neighbourhood). This affects the power of DA testing. Empirically, it was found that it’s best to have a distribution peaking between 50 and 100. Otherwise you might consider rerunning makeNhoods increasing k and/or prop.
@@ -169,7 +155,7 @@ dm
 Milo uses an adaptation of the Spatial FDR correction, which accounts for the overlap between neighbourhoods. Specifically, each hypothesis test P-value is weighted by the reciprocal of the kth nearest neighbour distance. To use this statistic we first need to store the distances between nearest neighbors in the Milo object.
 
 ```{r}
-milo <- calcNhoodDistance(milo, d=10)
+milo <- calcNhoodDistance(milo, d=15)
 ```
 
 Now we can calculate a Fold-change and corrected P-value for each neighbourhood, which indicates whether there is significant differential abundance between conditions.
@@ -209,11 +195,11 @@ head(da_results)
 ggplot(da_results, aes(final_type_fraction)) + geom_histogram(bins=50)
 ```
 
-It seems like there are a lot of neighborhoods where cell types are very mixed. Biology or annotation issues?
+Most neighborhoods are relatively homogeneous.
 
 ```{r}
 # we can define a threshold for final_type_fraction to exclude neighbourhoods that are a mix of cell types
-da_results$final_type <- ifelse(da_results$final_type_fraction < 0.6, "Mixed", da_results$final_type)
+da_results$final_type <- ifelse(da_results$final_type_fraction < 0.7, "Mixed", da_results$final_type)
 ```
 
 ```{r}
@@ -224,4 +210,4 @@ plotDAbeeswarm(da_results, group.by = "final_type", alpha = 1)
 Again, no significant results. Each dot is a neighborhood, not an entire cell type, so within one annotated cell type, different local regions can behave differently between WT and KO. That is the reason why we might see both positive and negative logFC inside the same broad annotation. This could mean that WT enriches one sub-state, whereas KO enriches another rather than the entire lineage uniformly increasing/decreasing. This distinguishes Milo from cluster-based DA, which investigates if the total number of cells in cluster X changes. Milo investigates change in local regions, so it naturally produces bidirectional effects inside broad labels and fine-grained state-specific DA.
 
 Additional steps?
-Overlay DA neighborhoods onto UMAP with cell type labels, plot marker gradients across DA regions
+Plot marker gradients across DA regions
